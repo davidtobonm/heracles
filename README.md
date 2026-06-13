@@ -130,3 +130,17 @@ labor:
 ```
 
 Higher concurrency still respects dependencies, issue `## Exclusive Scopes`, isolated Issue Workspaces, and each selected Agent Profile's concurrency limit. The scheduler skips temporarily conflicting work so independent Ready Issues are not starved, then repeatedly selects newly unblocked work until the defined backlog is empty.
+
+## Change Sets
+
+Heracles delivers a completed issue as one Change Set with exactly one pull request for each touched Target Repository. Every pull request links the issue and related pull requests, and includes the review summary, QA steps, and local evidence references.
+
+Automatic merging is disabled by default. It must be enabled explicitly, and can declare cross-repository merge order:
+
+```yaml
+delivery:
+  auto_merge: true
+  merge_order: [backend, shared, frontend]
+```
+
+Before opening pull requests, every touched repository must pass its configured local verification. With automatic merging enabled, Heracles additionally waits for required GitHub checks before merging each pull request in order. If a later merge fails, already merged pull requests remain recorded, remaining pull requests stay open, and the Change Set becomes blocked for operator attention.

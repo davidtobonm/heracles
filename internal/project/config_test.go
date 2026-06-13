@@ -96,3 +96,25 @@ func TestLoadRejectsUnsupportedVersionAndUnknownFields(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadValidatesDeliveryMergeOrder(t *testing.T) {
+	t.Parallel()
+
+	for name, mergeOrder := range map[string]string{
+		"unknown repository":   "missing",
+		"duplicate repository": "widget, widget",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "heracles.yaml")
+			contents := "version: 1\nissue_tracker:\n  github: example/widget\nrepositories:\n  - name: widget\n    path: .\n    github: example/widget\n    base_branch: main\ndelivery:\n  auto_merge: true\n  merge_order: [" + mergeOrder + "]\n"
+			if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+				t.Fatalf("write configuration: %v", err)
+			}
+
+			_, err := project.Load(path)
+			if err == nil || !strings.Contains(err.Error(), "merge_order") {
+				t.Fatalf("Load() error = %v, want actionable merge_order failure", err)
+			}
+		})
+	}
+}

@@ -51,6 +51,9 @@ func TestInitializeDetectsContainingGitHubRepository(t *testing.T) {
 	if result.Config.Agents.DefaultProfile != "default" || result.Config.Agents.Profiles["default"].Provider != "codex" {
 		t.Errorf("agents = %#v, want usable default Agent Profile", result.Config.Agents)
 	}
+	if result.Config.Delivery.AutoMerge {
+		t.Errorf("delivery = %#v, want automatic merging disabled by default", result.Config.Delivery)
+	}
 }
 
 func TestInitializeOutsideGitRequiresTrackerAndRepository(t *testing.T) {
