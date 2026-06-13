@@ -54,3 +54,28 @@ Repository paths passed as relative paths are stored relative to `heracles.yaml`
 ## Local Execution History
 
 Heracles stores authoritative local workflow state in `.heracles/history.db`. Human-readable JSONL logs live under `.heracles/logs/`, and evidence artifacts live under `.heracles/artifacts/`. Reopening a project rebuilds JSONL mirrors from committed SQLite events, so interrupted workflows remain inspectable and resumable.
+
+## Agent Profiles And Diagnostics
+
+Agent Roles select reusable, inheritable profiles:
+
+```yaml
+agents:
+  default_profile: default
+  profiles:
+    default:
+      provider: codex
+      model: gpt-5.4
+      effort: high
+      timeout: 45m
+      env_allowlist: [PATH, HOME]
+      concurrency: 1
+    reviewer:
+      extends: default
+      provider: claude
+      model: sonnet
+  roles:
+    reviewer: reviewer
+```
+
+Heracles supports Codex, Claude Code, OpenCode, and Kimi Code. Provider-specific model, effort, and variant settings are validated instead of silently ignored. Run `heracles doctor` before a Labor to validate the Project Configuration, Target Repositories, GitHub authentication, Agent Profiles, capabilities, and required executables. Diagnostics never invoke a paid agent session.

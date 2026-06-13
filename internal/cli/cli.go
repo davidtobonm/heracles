@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/davidtobonm/heracles/internal/agent"
 	"github.com/davidtobonm/heracles/internal/buildinfo"
+	"github.com/davidtobonm/heracles/internal/doctor"
 	"github.com/davidtobonm/heracles/internal/project"
 )
 
@@ -17,6 +19,7 @@ Usage:
   heracles [command]
 
 Available Commands:
+  heracles doctor     Validate a project before starting a Labor
   heracles init       Initialize a portable Project Configuration
   heracles version    Print Heracles version information
 `
@@ -24,6 +27,7 @@ Available Commands:
 // Options supplies process-level dependencies to the CLI.
 type Options struct {
 	WorkingDirectory string
+	DoctorSystem     doctor.System
 }
 
 // Run executes the Heracles CLI and returns a process exit code.
@@ -42,6 +46,10 @@ func RunWithOptions(args []string, stdout, stderr io.Writer, options Options) in
 		return runInit(args[1:], stdout, stderr, options)
 	}
 
+	if args[0] == "doctor" {
+		return runDoctor(args[1:], stdout, stderr, options)
+	}
+
 	if args[0] == "version" {
 		fmt.Fprintln(stdout, buildinfo.String())
 		return 0
@@ -49,6 +57,42 @@ func RunWithOptions(args []string, stdout, stderr io.Writer, options Options) in
 
 	fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 	return 2
+}
+
+func runDoctor(args []string, stdout, stderr io.Writer, options Options) int {
+	flags := flag.NewFlagSet("heracles doctor", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "", "select Project Configuration path")
+	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
+		return 0
+	} else if err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "heracles doctor does not accept positional arguments")
+		return 2
+	}
+
+	path, err := project.Discover(options.WorkingDirectory, *configPath)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	loaded, err := project.Load(path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	system := options.DoctorSystem
+	if system == nil {
+		system = doctor.OSSystem{}
+	}
+	report := doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+	fmt.Fprint(stdout, report.String())
+	if !report.OK {
+		return 1
+	}
+	return 0
 }
 
 func runInit(args []string, stdout, stderr io.Writer, options Options) int {

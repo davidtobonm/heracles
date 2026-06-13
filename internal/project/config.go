@@ -14,6 +14,7 @@ type Config struct {
 	Version      int                `yaml:"version"`
 	IssueTracker IssueTrackerConfig `yaml:"issue_tracker"`
 	Repositories []RepositoryConfig `yaml:"repositories"`
+	Agents       AgentConfig        `yaml:"agents,omitempty"`
 }
 
 // IssueTrackerConfig identifies the GitHub repository whose issues define work.
@@ -27,6 +28,34 @@ type RepositoryConfig struct {
 	Path       string `yaml:"path"`
 	GitHub     string `yaml:"github"`
 	BaseBranch string `yaml:"base_branch"`
+}
+
+// AgentConfig declares reusable profiles and Agent Role assignments.
+type AgentConfig struct {
+	DefaultProfile string                   `yaml:"default_profile,omitempty"`
+	Profiles       map[string]ProfileConfig `yaml:"profiles,omitempty"`
+	Roles          RoleConfig               `yaml:"roles,omitempty"`
+}
+
+// ProfileConfig declares one possibly inherited Agent Profile.
+type ProfileConfig struct {
+	Extends      string   `yaml:"extends,omitempty"`
+	Provider     string   `yaml:"provider,omitempty"`
+	Model        string   `yaml:"model,omitempty"`
+	Effort       string   `yaml:"effort,omitempty"`
+	Variant      string   `yaml:"variant,omitempty"`
+	Timeout      string   `yaml:"timeout,omitempty"`
+	ExtraArgs    []string `yaml:"extra_args,omitempty"`
+	EnvAllowlist []string `yaml:"env_allowlist,omitempty"`
+	Concurrency  int      `yaml:"concurrency,omitempty"`
+}
+
+// RoleConfig assigns Agent Profiles to Labor responsibilities.
+type RoleConfig struct {
+	Planner     string `yaml:"planner,omitempty"`
+	IssueAuthor string `yaml:"issue_author,omitempty"`
+	Implementer string `yaml:"implementer,omitempty"`
+	Reviewer    string `yaml:"reviewer,omitempty"`
 }
 
 // LoadedConfig is a validated Project Configuration and its location.

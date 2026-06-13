@@ -95,6 +95,17 @@ func Initialize(ctx context.Context, options InitOptions) (InitResult, error) {
 		Version:      1,
 		IssueTracker: IssueTrackerConfig{GitHub: tracker},
 		Repositories: repositories,
+		Agents: AgentConfig{
+			DefaultProfile: "default",
+			Profiles: map[string]ProfileConfig{
+				"default": {
+					Provider:     "codex",
+					Timeout:      "1h",
+					EnvAllowlist: []string{"PATH", "HOME"},
+					Concurrency:  1,
+				},
+			},
+		},
 	}
 	if err := validate(config); err != nil {
 		return InitResult{}, err

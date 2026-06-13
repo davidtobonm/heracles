@@ -48,6 +48,9 @@ func TestInitializeDetectsContainingGitHubRepository(t *testing.T) {
 	if repository.Name != "widget" || repository.Path != "." || repository.GitHub != "example/widget" || repository.BaseBranch != "main" {
 		t.Errorf("repository = %#v, want detected portable defaults", repository)
 	}
+	if result.Config.Agents.DefaultProfile != "default" || result.Config.Agents.Profiles["default"].Provider != "codex" {
+		t.Errorf("agents = %#v, want usable default Agent Profile", result.Config.Agents)
+	}
 }
 
 func TestInitializeOutsideGitRequiresTrackerAndRepository(t *testing.T) {

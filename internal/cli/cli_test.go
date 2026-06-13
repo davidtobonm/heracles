@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +75,50 @@ func TestInitHelpExitsSuccessfully(t *testing.T) {
 	}
 }
 
+func TestDoctorDiscoversConfigurationAndReportsChecks(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	config := `version: 1
+issue_tracker:
+  github: example/widget
+repositories:
+  - name: widget
+    path: .
+    github: example/widget
+    base_branch: main
+agents:
+  default_profile: default
+  profiles:
+    default:
+      provider: codex
+  roles: {}
+`
+	if err := os.WriteFile(filepath.Join(root, "heracles.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("write Project Configuration: %v", err)
+	}
+	nested := filepath.Join(root, "docs")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatalf("create nested directory: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := cli.RunWithOptions([]string{"doctor"}, &stdout, &stderr, cli.Options{
+		WorkingDirectory: nested,
+		DoctorSystem:     cliFakeSystem{},
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("RunWithOptions(doctor) exit code = %d, want 0; stderr = %q; stdout = %q", exitCode, stderr.String(), stdout.String())
+	}
+	for _, expected := range []string{"[ok] GitHub authentication", "[ok] Agent Profiles", "[ok] Target Repository widget"} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Errorf("doctor output %q does not contain %q", stdout.String(), expected)
+		}
+	}
+}
+
 func TestVersionReportsBuildMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -95,6 +140,16 @@ func TestVersionReportsBuildMetadata(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Errorf("stderr = %q, want empty", stderr.String())
 	}
+}
+
+type cliFakeSystem struct{}
+
+func (cliFakeSystem) LookPath(executable string) (string, error) {
+	return "/fake/" + executable, nil
+}
+
+func (cliFakeSystem) Run(context.Context, string, ...string) error {
+	return nil
 }
 
 func runCommand(t testing.TB, workingDirectory, command string, args ...string) {
