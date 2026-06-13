@@ -17,6 +17,7 @@ type Config struct {
 	Agents       AgentConfig        `yaml:"agents,omitempty"`
 	Workspaces   WorkspaceConfig    `yaml:"workspaces,omitempty"`
 	Labor        LaborConfig        `yaml:"labor,omitempty"`
+	Delivery     DeliveryConfig     `yaml:"delivery,omitempty"`
 }
 
 // IssueTrackerConfig identifies the GitHub repository whose issues define work.
@@ -72,6 +73,12 @@ type WorkspaceConfig struct {
 // LaborConfig declares end-to-end orchestration policy.
 type LaborConfig struct {
 	IssueConcurrency int `yaml:"issue_concurrency,omitempty"`
+}
+
+// DeliveryConfig declares pull request and automatic merge policy.
+type DeliveryConfig struct {
+	AutoMerge  bool     `yaml:"auto_merge"`
+	MergeOrder []string `yaml:"merge_order,omitempty"`
 }
 
 // LoadedConfig is a validated Project Configuration and its location.
@@ -195,6 +202,16 @@ func validate(config Config) error {
 		if _, err := parseGitHubRepository(repository.GitHub); err != nil {
 			return fmt.Errorf("invalid Target Repository %q GitHub repository: %w", repository.Name, err)
 		}
+	}
+	mergeNames := make(map[string]struct{}, len(config.Delivery.MergeOrder))
+	for _, name := range config.Delivery.MergeOrder {
+		if _, exists := names[name]; !exists {
+			return fmt.Errorf("delivery merge_order references unknown Target Repository %q", name)
+		}
+		if _, exists := mergeNames[name]; exists {
+			return fmt.Errorf("delivery merge_order contains duplicate Target Repository %q", name)
+		}
+		mergeNames[name] = struct{}{}
 	}
 	return nil
 }

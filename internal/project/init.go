@@ -113,6 +113,9 @@ func Initialize(ctx context.Context, options InitOptions) (InitResult, error) {
 			PreserveBlocked: true,
 		},
 		Labor: LaborConfig{IssueConcurrency: 1},
+		Delivery: DeliveryConfig{
+			AutoMerge: false,
+		},
 	}
 	if err := validate(config); err != nil {
 		return InitResult{}, err
