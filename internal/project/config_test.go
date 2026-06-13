@@ -118,3 +118,18 @@ func TestLoadValidatesDeliveryMergeOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadRejectsNegativePlanningQuestionBudget(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "heracles.yaml")
+	contents := "version: 1\nissue_tracker:\n  github: example/widget\nrepositories:\n  - name: widget\n    path: .\n    github: example/widget\n    base_branch: main\nplanning:\n  question_budget: -1\n"
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write configuration: %v", err)
+	}
+
+	_, err := project.Load(path)
+	if err == nil || !strings.Contains(err.Error(), "question_budget") {
+		t.Fatalf("Load() error = %v, want actionable question budget failure", err)
+	}
+}

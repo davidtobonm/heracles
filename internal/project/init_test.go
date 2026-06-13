@@ -54,6 +54,9 @@ func TestInitializeDetectsContainingGitHubRepository(t *testing.T) {
 	if result.Config.Delivery.AutoMerge {
 		t.Errorf("delivery = %#v, want automatic merging disabled by default", result.Config.Delivery)
 	}
+	if result.Config.Planning.QuestionBudget != 20 {
+		t.Errorf("planning = %#v, want default Question Budget 20", result.Config.Planning)
+	}
 }
 
 func TestInitializeOutsideGitRequiresTrackerAndRepository(t *testing.T) {

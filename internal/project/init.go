@@ -116,6 +116,7 @@ func Initialize(ctx context.Context, options InitOptions) (InitResult, error) {
 		Delivery: DeliveryConfig{
 			AutoMerge: false,
 		},
+		Planning: PlanningConfig{QuestionBudget: 20},
 	}
 	if err := validate(config); err != nil {
 		return InitResult{}, err
