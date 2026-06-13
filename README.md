@@ -150,6 +150,18 @@ labor:
 
 Higher concurrency still respects dependencies, issue `## Exclusive Scopes`, isolated Issue Workspaces, and each selected Agent Profile's concurrency limit. The scheduler skips temporarily conflicting work so independent Ready Issues are not starved, then repeatedly selects newly unblocked work until the defined backlog is empty.
 
+## Implementation Stage
+
+The independently runnable Implementation Stage composes the delivery boundaries into one durable attempt:
+
+```text
+claimed -> workspace_ready -> implemented -> reviewed -> verified -> delivered -> completed
+```
+
+The configured Implementer works in isolated Issue Workspace worktrees and must return auditable Red and Green Evidence or a reasoned TDD Exemption. A separately configured Reviewer checks the complete issue and PRD contract, may make corrective edits, and must verify those corrections. Local repository gates run before Change Set delivery.
+
+Every transition, evidence reference, verification result, Review outcome, and Change Set is preserved in resumable attempt state and mirrored into Execution History. Failures and blocked outcomes publish actionable shared issue state and preserve the Issue Workspace. An explicit retry resumes that workspace from the last durable boundary. The backlog runner repeatedly refreshes newly eligible Ready Issues until no defined work remains or the remaining backlog is genuinely blocked.
+
 ## Change Sets
 
 Heracles delivers a completed issue as one Change Set with exactly one pull request for each touched Target Repository. Every pull request links the issue and related pull requests, and includes the review summary, QA steps, and local evidence references.
