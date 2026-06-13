@@ -1,0 +1,49 @@
+version: 1
+issue_tracker:
+  github: acme/delivery-backlog
+repositories:
+  - name: shared
+    path: ../shared
+    github: acme/shared
+    base_branch: main
+    verify:
+      - npm test
+  - name: backend
+    path: ../backend
+    github: acme/backend
+    base_branch: main
+    verify:
+      - go test ./...
+  - name: frontend
+    path: /srv/projects/frontend
+    github: acme/frontend
+    base_branch: main
+    verify:
+      - npm test
+agents:
+  default_profile: codex
+  profiles:
+    codex:
+      provider: codex
+      effort: high
+      timeout: 1h
+      env_allowlist: [PATH, HOME]
+      concurrency: 2
+    reviewer:
+      extends: codex
+      provider: claude
+      model: sonnet
+  roles:
+    reviewer: reviewer
+workspaces:
+  root: .heracles/workspaces
+  cleanup_success: true
+  preserve_failed: true
+  preserve_blocked: true
+labor:
+  issue_concurrency: 2
+delivery:
+  auto_merge: false
+  merge_order: [shared, backend, frontend]
+planning:
+  question_budget: 20

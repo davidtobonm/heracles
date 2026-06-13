@@ -1,8 +1,6 @@
 # Heracles
 
-Heracles coordinates agent-driven software delivery from an understood problem to an emptied implementation backlog.
-
-The project is under active development. The current binary foundation provides stable help and version contracts while the Planning, Issue, and Implementation Stages are built from the [product requirements](PRD.md).
+Heracles coordinates agent-driven software delivery from an understood problem to an emptied implementation backlog. It can run Planning, Issue, and Implementation Stages independently or compose them into a durable Labor with human Approval Gates.
 
 ## Requirements
 
@@ -20,6 +18,8 @@ heracles --help
 
 Versioned release binaries for Linux, macOS, and Windows are published from `v*` tags.
 
+Download the binary for your operating system and architecture from [GitHub Releases](https://github.com/davidtobonm/heracles/releases), verify it against `checksums.txt`, make it executable on Linux or macOS, and place it on `PATH`.
+
 ## Develop
 
 ```sh
@@ -29,6 +29,8 @@ make build
 ```
 
 CI runs formatting, static analysis, race-enabled tests, and cross-platform builds. Tests use deterministic fake executables and never invoke paid or authenticated agent CLIs.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and release expectations.
 
 ## Initialize A Project
 
@@ -79,6 +81,8 @@ agents:
 ```
 
 Heracles supports Codex, Claude Code, OpenCode, and Kimi Code. Provider-specific model, effort, and variant settings are validated instead of silently ignored. Run `heracles doctor` before a Labor to validate the Project Configuration, Target Repositories, GitHub authentication, Agent Profiles, capabilities, and required executables. Diagnostics never invoke a paid agent session.
+
+See [Provider Capabilities](docs/providers.md) for the exact capability matrix and official CLI references. Validated topology examples live under [`examples/`](examples/).
 
 ## Planning Stage
 
@@ -228,3 +232,12 @@ delivery:
 ```
 
 Before opening pull requests, every touched repository must pass its configured local verification. With automatic merging enabled, Heracles additionally waits for required GitHub checks before merging each pull request in order. If a later merge fails, already merged pull requests remain recorded, remaining pull requests stay open, and the Change Set becomes blocked for operator attention.
+
+## Reference
+
+- [Representative Workflows](docs/workflows.md)
+- [Workflow Contracts](docs/contracts.md)
+- [End-to-End Acceptance Scenario](docs/acceptance.md)
+- [Product Requirements](PRD.md)
+- [Architecture Decisions](docs/adr/)
+- [MIT License](LICENSE)

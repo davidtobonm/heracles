@@ -9,7 +9,19 @@ permissions:
   contents: write
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - name: Verify release source
+        run: make check
+
   build:
+    needs: quality
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -48,7 +60,11 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Generate checksums
+        run: sha256sum dist/heracles-* > dist/checksums.txt
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/heracles-*
+          files: |
+            dist/heracles-*
+            dist/checksums.txt
           generate_release_notes: true
