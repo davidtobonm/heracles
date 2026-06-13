@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/davidtobonm/heracles/internal/cli"
+	"github.com/davidtobonm/heracles/internal/control"
 )
 
 func TestHelpDescribesHeracles(t *testing.T) {
@@ -24,7 +25,7 @@ func TestHelpDescribesHeracles(t *testing.T) {
 		t.Fatalf("Run(--help) exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
 
-	for _, expected := range []string{"Heracles", "Usage:", "heracles version"} {
+	for _, expected := range []string{"Heracles", "Usage:", "heracles plan", "heracles labor", "heracles inspect", "heracles version"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("help output %q does not contain %q", stdout.String(), expected)
 		}
@@ -32,6 +33,65 @@ func TestHelpDescribesHeracles(t *testing.T) {
 
 	if stderr.Len() != 0 {
 		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestControlCommandsUseSharedSurfaceAndStableJSON(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := cli.RunWithOptions([]string{"labor", "--id", "labor-1", "--problem", "Build it", "--json"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exitCode != 0 {
+		t.Fatalf("labor exit = %d; stderr = %q", exitCode, stderr.String())
+	}
+	if len(surface.operations) != 1 || surface.operations[0].Name != "labor" || surface.operations[0].ID != "labor-1" {
+		t.Errorf("operations = %#v", surface.operations)
+	}
+	for _, expected := range []string{`"operation": "labor"`, `"id": "labor-1"`, `"status": "awaiting_planning_approval"`} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Errorf("JSON output %q does not contain %q", stdout.String(), expected)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = cli.RunWithOptions([]string{"approve", "planning", "labor-1", "--reason", "approved"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exitCode != 0 || surface.operations[1].Decision != "approve" || surface.operations[1].Kind != "planning" {
+		t.Errorf("approve exit/operation = %d / %#v", exitCode, surface.operations)
+	}
+}
+
+func TestListInspectAndOperationsValidateArguments(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	for _, testCase := range []struct {
+		args []string
+		name string
+		kind string
+		id   string
+	}{
+		{args: []string{"list", "labors"}, name: "list", kind: "labors"},
+		{args: []string{"inspect", "labor", "labor-1"}, name: "inspect", kind: "labor", id: "labor-1"},
+		{args: []string{"retry", "attempt-1"}, name: "retry", id: "attempt-1"},
+		{args: []string{"resume", "labor-1"}, name: "resume", id: "labor-1"},
+		{args: []string{"cancel", "labor-1", "--reason", "stop"}, name: "cancel", id: "labor-1"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if exit := cli.RunWithOptions(testCase.args, &stdout, &stderr, cli.Options{Control: surface}); exit != 0 {
+			t.Fatalf("%v exit = %d; stderr = %q", testCase.args, exit, stderr.String())
+		}
+		operation := surface.operations[len(surface.operations)-1]
+		if operation.Name != testCase.name || operation.Kind != testCase.kind || operation.ID != testCase.id {
+			t.Errorf("%v operation = %#v", testCase.args, operation)
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	if exit := cli.RunWithOptions([]string{"inspect", "labor"}, &stdout, &stderr, cli.Options{Control: surface}); exit != 2 {
+		t.Errorf("invalid inspect exit = %d, want 2", exit)
 	}
 }
 
@@ -147,6 +207,17 @@ type cliFakeSystem struct{}
 func (cliFakeSystem) LookPath(executable string) (string, error) {
 	return "/fake/" + executable, nil
 }
+
+type fakeControl struct {
+	operations []control.Operation
+}
+
+func (surface *fakeControl) Execute(_ context.Context, operation control.Operation) (control.Result, error) {
+	surface.operations = append(surface.operations, operation)
+	return control.Result{Operation: operation.Name, Kind: operation.Kind, ID: operation.ID, Status: "awaiting_planning_approval", Data: map[string]string{"id": operation.ID}}, nil
+}
+
+func (surface *fakeControl) Close() error { return nil }
 
 func (cliFakeSystem) Run(context.Context, string, ...string) error {
 	return nil

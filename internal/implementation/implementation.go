@@ -326,6 +326,9 @@ func (service Service) changeSetRequest(state State) changeset.Request {
 	for index := range repositories {
 		repositories[index].Touched = touched[repositories[index].Name]
 		repositories[index].Verified = verified[repositories[index].Name]
+		if repositories[index].Head == "" {
+			repositories[index].Head = state.Workspace.Branch
+		}
 		repositories[index].ReviewSummary = state.Review.Summary
 		repositories[index].QASteps = qa[repositories[index].Name]
 		repositories[index].Evidence = append([]string(nil), evidence...)
