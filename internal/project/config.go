@@ -15,6 +15,7 @@ type Config struct {
 	IssueTracker IssueTrackerConfig `yaml:"issue_tracker"`
 	Repositories []RepositoryConfig `yaml:"repositories"`
 	Agents       AgentConfig        `yaml:"agents,omitempty"`
+	Workspaces   WorkspaceConfig    `yaml:"workspaces,omitempty"`
 }
 
 // IssueTrackerConfig identifies the GitHub repository whose issues define work.
@@ -56,6 +57,14 @@ type RoleConfig struct {
 	IssueAuthor string `yaml:"issue_author,omitempty"`
 	Implementer string `yaml:"implementer,omitempty"`
 	Reviewer    string `yaml:"reviewer,omitempty"`
+}
+
+// WorkspaceConfig declares Issue Workspace location and lifecycle policy.
+type WorkspaceConfig struct {
+	Root            string `yaml:"root,omitempty"`
+	CleanupSuccess  bool   `yaml:"cleanup_success"`
+	PreserveFailed  bool   `yaml:"preserve_failed"`
+	PreserveBlocked bool   `yaml:"preserve_blocked"`
 }
 
 // LoadedConfig is a validated Project Configuration and its location.
@@ -142,6 +151,18 @@ func (loaded LoadedConfig) RepositoryPath(name string) (string, error) {
 		return path, nil
 	}
 	return "", fmt.Errorf("unknown Target Repository %q", name)
+}
+
+// WorkspaceRoot resolves the configured Issue Workspace root.
+func (loaded LoadedConfig) WorkspaceRoot() string {
+	root := loaded.Config.Workspaces.Root
+	if root == "" {
+		root = ".heracles/workspaces"
+	}
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(filepath.Dir(loaded.Path), root)
+	}
+	return filepath.Clean(root)
 }
 
 func validate(config Config) error {

@@ -59,6 +59,9 @@ func TestDiscoverAndLoadResolvePortableRepositoryPaths(t *testing.T) {
 	if resolvedPath != canonicalRepositoryPath {
 		t.Errorf("resolved repository path = %q, want %q", resolvedPath, canonicalRepositoryPath)
 	}
+	if loaded.WorkspaceRoot() != filepath.Join(canonicalRepositoryPath, ".heracles", "workspaces") {
+		t.Errorf("workspace root = %q, want portable state path", loaded.WorkspaceRoot())
+	}
 }
 
 func TestLoadRejectsUnsupportedVersionAndUnknownFields(t *testing.T) {
