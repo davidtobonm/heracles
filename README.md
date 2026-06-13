@@ -106,3 +106,18 @@ workspaces:
 ```
 
 Original working copies may remain dirty and on their current branches. Heracles records baseline commits, detects both committed and uncommitted issue changes, preserves failed or blocked work for inspection and resume, and removes successful worktrees according to policy.
+
+Each Target Repository may declare its own verification commands:
+
+```yaml
+repositories:
+  - name: backend
+    path: ../backend
+    github: acme/backend
+    base_branch: main
+    verify:
+      - go test ./...
+      - go vet ./...
+```
+
+Delivery is blocked unless Red Evidence records an observed failure before implementation and Green Evidence records a later passing result with linked artifacts. A `heracles:tdd-exempt` issue may proceed only with a reasoned exemption. The Reviewer receives the issue, PRD, changes, evidence, and verification results, checks correctness, YAGNI, and DRY, and may make corrective changes before rerunning verification.

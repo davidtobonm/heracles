@@ -25,10 +25,11 @@ type IssueTrackerConfig struct {
 
 // RepositoryConfig identifies a Target Repository.
 type RepositoryConfig struct {
-	Name       string `yaml:"name"`
-	Path       string `yaml:"path"`
-	GitHub     string `yaml:"github"`
-	BaseBranch string `yaml:"base_branch"`
+	Name       string   `yaml:"name"`
+	Path       string   `yaml:"path"`
+	GitHub     string   `yaml:"github"`
+	BaseBranch string   `yaml:"base_branch"`
+	Verify     []string `yaml:"verify,omitempty"`
 }
 
 // AgentConfig declares reusable profiles and Agent Role assignments.
