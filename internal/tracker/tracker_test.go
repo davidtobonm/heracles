@@ -120,6 +120,24 @@ func TestClaimRechecksDependenciesBeforeTransitioning(t *testing.T) {
 	}
 }
 
+func TestRetryPublishesClaimedStateAndOpenIssuesExposeBacklog(t *testing.T) {
+	t.Parallel()
+
+	reference := tracker.Reference{Owner: "acme", Repo: "backlog", Number: 7}
+	client := newFakeClient(issue("acme/backlog", 7, []string{tracker.LabelBlocked, "bug"}, ""))
+	service := tracker.New("acme/backlog", client)
+	if err := service.Retry(context.Background(), reference, "labor-1"); err != nil {
+		t.Fatalf("Retry() error = %v", err)
+	}
+	open, err := service.OpenIssues(context.Background())
+	if err != nil {
+		t.Fatalf("OpenIssues() error = %v", err)
+	}
+	if len(open) != 1 || !slices.Contains(open[0].Labels, tracker.LabelInProgress) || !slices.Contains(open[0].Labels, "bug") {
+		t.Errorf("open issues = %#v, want retried claimed issue with unrelated labels", open)
+	}
+}
+
 type fakeClient struct {
 	mu       sync.Mutex
 	issues   map[string]tracker.Issue

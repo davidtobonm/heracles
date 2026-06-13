@@ -85,6 +85,11 @@ func New(repository string, client Client) *Service {
 	return &Service{repository: repository, client: client}
 }
 
+// OpenIssues returns the complete currently open Issue Tracker backlog.
+func (service *Service) OpenIssues(ctx context.Context) ([]Issue, error) {
+	return service.client.ListOpenIssues(ctx, service.repository)
+}
+
 // ParseReference parses a full GitHub issue URL.
 func ParseReference(value string) (Reference, error) {
 	parsed, err := url.Parse(strings.TrimSpace(value))
@@ -242,6 +247,11 @@ func (service *Service) Block(ctx context.Context, reference Reference, reason s
 // Complete marks an issue done and publishes a shared completion comment.
 func (service *Service) Complete(ctx context.Context, reference Reference, summary string) error {
 	return service.transition(ctx, reference, LabelDone, "Completed by Heracles: "+summary)
+}
+
+// Retry returns an explicitly retried issue to the shared claimed state.
+func (service *Service) Retry(ctx context.Context, reference Reference, laborID string) error {
+	return service.transition(ctx, reference, LabelInProgress, fmt.Sprintf("Retried by Heracles Labor `%s`.", laborID))
 }
 
 func (service *Service) transition(ctx context.Context, reference Reference, label, comment string) error {
