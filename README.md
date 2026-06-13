@@ -99,6 +99,15 @@ The complete proposal set pauses at an Approval Gate before publication. Approve
 
 The bundled skills.sh-compatible skill lives at `skills/to-issues-for-heracles/SKILL.md` and can be installed globally or copied into a project skill directory.
 
+## Labors
+
+A Labor composes Planning, Issue, and Implementation Stages from a problem description through an empty defined backlog. It has two distinct durable human decisions:
+
+1. Approve or reject the Planning PRD.
+2. Approve or reject issue publication.
+
+Rejection returns only the affected stage to revision. Approval and publication are idempotent, so interruption after a committed decision resumes without repeating it or duplicating issues. Active and blocked Labors can resume from their latest durable boundary; a Labor reaches `completed` only when its Implementation Stage reports the defined backlog exhausted. Cross-stage status, stage records, and both Approval Gates are mirrored into Execution History.
+
 ## Heracles-Compatible Issues
 
 The GitHub Issue Tracker uses explicit shared state labels:

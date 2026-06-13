@@ -37,7 +37,7 @@ func TestPlanningFinishesEarlyWithCompleteContextAndApprovalGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if state.Status != planning.StatusAwaitingApproval || state.Gate.Status != planning.GatePending || state.PRDPath == "" {
+	if state.Status != planning.StatusAwaitingApproval || state.Gate.Status != planning.GatePending || state.PRDPath == "" || state.PRD == "" {
 		t.Fatalf("state = %#v, want persisted PRD and pending approval", state)
 	}
 	if len(state.DocumentationUpdates) != 1 || state.DocumentationUpdates[0].Path != "CONTEXT.md" {

@@ -165,6 +165,9 @@ func (service Service) Decide(ctx context.Context, id, decision, reason string) 
 	if err != nil {
 		return State{}, err
 	}
+	if (state.Status == StatusApproved && decision == DecisionApprove) || (state.Status == StatusRejected && decision == DecisionReject) {
+		return state, nil
+	}
 	if state.Status != StatusAwaitingApproval {
 		return state, fmt.Errorf("Issue Stage %q is not awaiting approval", id)
 	}
