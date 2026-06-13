@@ -32,6 +32,15 @@ Ignore https://github.com/acme/ignored/issues/1 here.
 	}
 }
 
+func TestExclusiveScopesAreDeterministic(t *testing.T) {
+	t.Parallel()
+
+	scopes := tracker.ExclusiveScopes("## Exclusive Scopes\n- api\n- docs\n- api\n")
+	if !slices.Equal(scopes, []string{"api", "docs"}) {
+		t.Errorf("ExclusiveScopes() = %#v, want sorted unique scopes", scopes)
+	}
+}
+
 func TestReadyIssuesExcludeHITLAndUnresolvedDependencies(t *testing.T) {
 	t.Parallel()
 

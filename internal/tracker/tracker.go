@@ -128,6 +128,28 @@ func Dependencies(body string) ([]Reference, error) {
 	return references, nil
 }
 
+// ExclusiveScopes parses concurrency exclusion scopes from an issue body.
+func ExclusiveScopes(body string) []string {
+	var scopes []string
+	inScopes := false
+	for _, rawLine := range strings.Split(body, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(line, "## ") {
+			inScopes = strings.EqualFold(line, "## Exclusive Scopes")
+			continue
+		}
+		if !inScopes || !strings.HasPrefix(line, "-") {
+			continue
+		}
+		scope := strings.TrimSpace(strings.TrimPrefix(line, "-"))
+		if scope != "" && !strings.HasPrefix(strings.ToLower(scope), "none") {
+			scopes = append(scopes, scope)
+		}
+	}
+	slices.Sort(scopes)
+	return slices.Compact(scopes)
+}
+
 // ReadyIssues returns unblocked AFK Ready Issues in deterministic order.
 func (service *Service) ReadyIssues(ctx context.Context) ([]Issue, error) {
 	issues, err := service.client.ListOpenIssues(ctx, service.repository)
