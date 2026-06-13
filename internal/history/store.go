@@ -236,6 +236,35 @@ func (s *Store) ResumableLabors(ctx context.Context) ([]Labor, error) {
 	return labors, nil
 }
 
+// Labors returns every Labor in durable creation order.
+func (s *Store) Labors(ctx context.Context) ([]Labor, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, problem, status, created_at, updated_at FROM labors ORDER BY created_at, id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read Labors: %w", err)
+	}
+	defer rows.Close()
+	var labors []Labor
+	for rows.Next() {
+		var labor Labor
+		var createdAt, updatedAt string
+		if err := rows.Scan(&labor.ID, &labor.Problem, &labor.Status, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan Labor: %w", err)
+		}
+		labor.CreatedAt, err = parseTimestamp(createdAt)
+		if err != nil {
+			return nil, err
+		}
+		labor.UpdatedAt, err = parseTimestamp(updatedAt)
+		if err != nil {
+			return nil, err
+		}
+		labors = append(labors, labor)
+	}
+	return labors, rows.Err()
+}
+
 // Events returns a Labor's events in durable order.
 func (s *Store) Events(ctx context.Context, laborID string) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx,

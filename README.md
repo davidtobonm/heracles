@@ -108,6 +108,25 @@ A Labor composes Planning, Issue, and Implementation Stages from a problem descr
 
 Rejection returns only the affected stage to revision. Approval and publication are idempotent, so interruption after a committed decision resumes without repeating it or duplicating issues. Active and blocked Labors can resume from their latest durable boundary; a Labor reaches `completed` only when its Implementation Stage reports the defined backlog exhausted. Cross-stage status, stage records, and both Approval Gates are mirrored into Execution History.
 
+## CLI Control Surface
+
+The CLI invokes the same high-level application services used by other Control Surfaces:
+
+```sh
+heracles plan --id plan-1 --problem "Clarify reliable delivery"
+heracles issues --id issues-1 --prd .heracles/planning/plan-1/PRD.md
+heracles run
+heracles labor --id labor-1 --problem "Deliver the approved roadmap"
+
+heracles approve planning labor-1 --reason "Scope approved"
+heracles reject issues labor-1 --reason "Split the migration slice"
+heracles retry labor-1-acme-backlog-7
+heracles resume labor-1
+heracles cancel labor-1 --reason "Superseded"
+```
+
+Use `heracles list` with `labors`, `issues`, `change-sets`, `gates`, `logs`, or `evidence`, and use `heracles inspect <kind> <id>` for a single record. Every operational command supports `--config`; stage commands discover `heracles.yaml` upward by default. Add `--json` for a stable machine-readable result and non-zero error exit behavior.
+
 ## Heracles-Compatible Issues
 
 The GitHub Issue Tracker uses explicit shared state labels:
