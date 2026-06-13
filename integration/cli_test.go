@@ -3,6 +3,7 @@
 package integration_test
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -36,5 +37,28 @@ func TestCompiledBinaryExposesHelpAndVersion(t *testing.T) {
 		if !strings.Contains(string(output), command.expected) {
 			t.Errorf("run %v output %q does not contain %q", command.args, output, command.expected)
 		}
+	}
+
+	repositoryPath := filepath.Join(t.TempDir(), "widget")
+	run(t, "", "git", "init", "--initial-branch=main", repositoryPath)
+	run(t, repositoryPath, "git", "remote", "add", "origin", "git@github.com:example/widget.git")
+
+	initCommand := exec.Command(binaryPath, "init")
+	initCommand.Dir = repositoryPath
+	if output, err := initCommand.CombinedOutput(); err != nil {
+		t.Fatalf("run init: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(repositoryPath, "heracles.yaml")); err != nil {
+		t.Fatalf("init did not create Project Configuration: %v", err)
+	}
+}
+
+func run(t testing.TB, workingDirectory, command string, args ...string) {
+	t.Helper()
+
+	process := exec.Command(command, args...)
+	process.Dir = workingDirectory
+	if output, err := process.CombinedOutput(); err != nil {
+		t.Fatalf("%s %v: %v\n%s", command, args, err, output)
 	}
 }

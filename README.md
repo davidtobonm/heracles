@@ -29,3 +29,24 @@ make build
 ```
 
 CI runs formatting, static analysis, race-enabled tests, and cross-platform builds. Tests use deterministic fake executables and never invoke paid or authenticated agent CLIs.
+
+## Initialize A Project
+
+From anywhere inside a Git repository with a GitHub `origin`:
+
+```sh
+heracles init
+```
+
+Heracles writes `heracles.yaml` at the repository root and uses that repository as both the Issue Tracker and first Target Repository.
+
+For sibling or unrelated repositories, provide a separate tracker and repeat `--repo`:
+
+```sh
+heracles init \
+  --tracker acme/delivery-backlog \
+  --repo ../backend \
+  --repo /absolute/path/to/frontend
+```
+
+Repository paths passed as relative paths are stored relative to `heracles.yaml`; absolute paths remain absolute. Project Configuration discovery searches upward from the current directory, and later commands can select a configuration explicitly with `--config`.
