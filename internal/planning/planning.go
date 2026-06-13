@@ -68,6 +68,7 @@ type State struct {
 	PermissionBeyond     bool                  `json:"permission_beyond_budget"`
 	DocumentationUpdates []DocumentationUpdate `json:"documentation_updates,omitempty"`
 	PRDPath              string                `json:"prd_path,omitempty"`
+	PRD                  string                `json:"prd,omitempty"`
 	Gate                 Gate                  `json:"gate"`
 }
 
@@ -215,6 +216,7 @@ func (service Service) Run(ctx context.Context, request RunRequest) (State, erro
 	if err != nil {
 		return state, err
 	}
+	state.PRD = response.PRD
 	state.Status = StatusAwaitingApproval
 	state.Gate = Gate{Status: GatePending}
 	return state, service.Store.Save(ctx, state)
@@ -225,6 +227,9 @@ func (service Service) Decide(ctx context.Context, id, decision, reason string) 
 	state, err := service.Store.Load(ctx, id)
 	if err != nil {
 		return State{}, err
+	}
+	if (state.Status == StatusApproved && decision == DecisionApprove) || (state.Status == StatusRejected && decision == DecisionReject) {
+		return state, nil
 	}
 	if state.Status != StatusAwaitingApproval {
 		return state, fmt.Errorf("Planning Stage %q is not awaiting approval", id)
