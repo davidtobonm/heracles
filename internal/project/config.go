@@ -16,6 +16,7 @@ type Config struct {
 	Repositories []RepositoryConfig `yaml:"repositories"`
 	Agents       AgentConfig        `yaml:"agents,omitempty"`
 	Workspaces   WorkspaceConfig    `yaml:"workspaces,omitempty"`
+	Labor        LaborConfig        `yaml:"labor,omitempty"`
 }
 
 // IssueTrackerConfig identifies the GitHub repository whose issues define work.
@@ -66,6 +67,11 @@ type WorkspaceConfig struct {
 	CleanupSuccess  bool   `yaml:"cleanup_success"`
 	PreserveFailed  bool   `yaml:"preserve_failed"`
 	PreserveBlocked bool   `yaml:"preserve_blocked"`
+}
+
+// LaborConfig declares end-to-end orchestration policy.
+type LaborConfig struct {
+	IssueConcurrency int `yaml:"issue_concurrency,omitempty"`
 }
 
 // LoadedConfig is a validated Project Configuration and its location.

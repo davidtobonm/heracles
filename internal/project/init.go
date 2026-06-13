@@ -112,6 +112,7 @@ func Initialize(ctx context.Context, options InitOptions) (InitResult, error) {
 			PreserveFailed:  true,
 			PreserveBlocked: true,
 		},
+		Labor: LaborConfig{IssueConcurrency: 1},
 	}
 	if err := validate(config); err != nil {
 		return InitResult{}, err
