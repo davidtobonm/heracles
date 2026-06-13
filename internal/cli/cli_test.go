@@ -25,7 +25,7 @@ func TestHelpDescribesHeracles(t *testing.T) {
 		t.Fatalf("Run(--help) exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
 	}
 
-	for _, expected := range []string{"Heracles", "Usage:", "heracles plan", "heracles labor", "heracles inspect", "heracles version"} {
+	for _, expected := range []string{"Heracles", "Usage:", "heracles plan", "heracles labor", "heracles inspect", "heracles mcp serve", "heracles version"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("help output %q does not contain %q", stdout.String(), expected)
 		}
@@ -33,6 +33,24 @@ func TestHelpDescribesHeracles(t *testing.T) {
 
 	if stderr.Len() != 0 {
 		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestMCPServeUsesSameInjectedControlSurface(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	input := strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"heracles_resume\",\"arguments\":{\"id\":\"labor-1\"}}}\n")
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"mcp", "serve"}, &stdout, &stderr, cli.Options{Control: surface, Input: input})
+	if exit != 0 {
+		t.Fatalf("mcp serve exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 1 || surface.operations[0].Name != "resume" {
+		t.Errorf("MCP operations = %#v", surface.operations)
+	}
+	if !strings.Contains(stdout.String(), `"structuredContent"`) {
+		t.Errorf("MCP output = %q", stdout.String())
 	}
 }
 

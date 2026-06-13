@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/davidtobonm/heracles/internal/agent"
 	"github.com/davidtobonm/heracles/internal/changeset"
 	"github.com/davidtobonm/heracles/internal/delivery"
+	"github.com/davidtobonm/heracles/internal/doctor"
 	"github.com/davidtobonm/heracles/internal/history"
 	"github.com/davidtobonm/heracles/internal/implementation"
 	"github.com/davidtobonm/heracles/internal/issuestage"
@@ -23,6 +25,7 @@ import (
 // Local is the reusable local application core behind Control Surfaces.
 type Local struct {
 	root               string
+	loaded             project.LoadedConfig
 	history            *history.Store
 	trackerClient      *tracker.GitHubClient
 	tracker            *tracker.Service
@@ -71,6 +74,7 @@ func NewLocal(ctx context.Context, loaded project.LoadedConfig) (*Local, error) 
 	}
 	local := &Local{
 		root:          root,
+		loaded:        loaded,
 		history:       executionHistory,
 		trackerClient: trackerClient,
 		tracker:       tracker.New(loaded.Config.IssueTracker.GitHub, trackerClient),
@@ -116,6 +120,14 @@ func (local *Local) Close() error {
 // Execute runs one high-level operation.
 func (local *Local) Execute(ctx context.Context, operation Operation) (Result, error) {
 	switch operation.Name {
+	case "init":
+		return result(operation, "initialized", local.loaded), nil
+	case "doctor":
+		report := doctor.Check(ctx, local.loaded, agent.DefaultRegistry(), doctor.OSSystem{})
+		if !report.OK {
+			return result(operation, "failed", report), errors.New("project diagnostics failed")
+		}
+		return result(operation, "ok", report), nil
 	case "plan":
 		state, err := local.planning.Run(ctx, planning.RunRequest{ID: operation.ID, Problem: operation.Problem, Repositories: local.repositoryContexts()})
 		return result(operation, state.Status, state), err
