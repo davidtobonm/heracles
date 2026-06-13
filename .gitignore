@@ -1,0 +1,29 @@
+# Build output
+/bin/
+/dist/
+/heracles
+*.exe
+
+# Local Heracles execution state
+/.heracles/
+**/.heracles/
+
+# Temporary worktrees and logs
+/.worktrees/
+*.log
+*.jsonl
+*.db
+*.db-shm
+*.db-wal
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
