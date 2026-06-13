@@ -91,6 +91,14 @@ planning:
 
 Planning may finish before the budget is exhausted. Questions beyond the budget remain pending until a user explicitly permits them. Approval completes the stage; rejection returns the same durable stage to revision without replaying already committed agent work.
 
+## Issue Stage
+
+The independently runnable Issue Stage gives a separately configured Issue Author an approved PRD and asks for tracer-bullet proposals. Every proposal must classify as AFK or HITL, cover user stories, include acceptance criteria, use full GitHub issue URLs for dependencies, and declare Exclusive Scopes where concurrent work would be unsafe.
+
+The complete proposal set pauses at an Approval Gate before publication. Approved publication is restart-safe: each created issue URL is persisted immediately, so resuming after an interruption skips already-created issues. AFK issues receive `heracles:ready` and remain ineligible until their dependencies resolve; human-dependent issues receive `heracles:hitl`.
+
+The bundled skills.sh-compatible skill lives at `skills/to-issues-for-heracles/SKILL.md` and can be installed globally or copied into a project skill directory.
+
 ## Heracles-Compatible Issues
 
 The GitHub Issue Tracker uses explicit shared state labels:
