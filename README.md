@@ -1,4 +1,4 @@
-# Heracles
+# 🏹 Heracles
 
 Heracles coordinates agent-driven software delivery from an understood problem to an emptied implementation backlog. It can run Planning, Issue, and Implementation Stages independently or compose them into a durable Labor with human Approval Gates.
 
