@@ -127,6 +127,31 @@ heracles cancel labor-1 --reason "Superseded"
 
 Use `heracles list` with `labors`, `issues`, `change-sets`, `gates`, `logs`, or `evidence`, and use `heracles inspect <kind> <id>` for a single record. Every operational command supports `--config`; stage commands discover `heracles.yaml` upward by default. Add `--json` for a stable machine-readable result and non-zero error exit behavior.
 
+## MCP Control Surface
+
+Start the standards-compatible newline-delimited stdio MCP server with:
+
+```sh
+heracles mcp serve
+```
+
+The server negotiates MCP protocol version `2025-11-25` and exposes the same named high-level operations as the CLI, including initialization, diagnostics, stages, Labors, approvals, retry, resume, cancel, list, and inspect. It deliberately exposes no arbitrary shell or command-execution tool. Tool failures return actionable MCP error results while the underlying application services preserve durable state.
+
+Example MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "heracles": {
+      "command": "heracles",
+      "args": ["mcp", "serve", "--config", "/absolute/path/to/heracles.yaml"]
+    }
+  }
+}
+```
+
+Without `--config`, the long-lived server discovers a project upward. Before a project exists, call `heracles_init`; the server initializes the project and then switches to the fully wired local Control Surface.
+
 ## Heracles-Compatible Issues
 
 The GitHub Issue Tracker uses explicit shared state labels:

@@ -13,6 +13,7 @@ import (
 	"github.com/davidtobonm/heracles/internal/buildinfo"
 	"github.com/davidtobonm/heracles/internal/control"
 	"github.com/davidtobonm/heracles/internal/doctor"
+	"github.com/davidtobonm/heracles/internal/mcp"
 	"github.com/davidtobonm/heracles/internal/project"
 )
 
@@ -28,6 +29,7 @@ Available Commands:
   heracles labor      Start or resume an end-to-end Labor
   heracles list       List durable Labors, issues, Change Sets, gates, logs, or evidence
   heracles inspect    Inspect one durable workflow record
+  heracles mcp serve  Start the stdio MCP Control Surface
   heracles approve    Approve a Planning or Issue publication gate
   heracles reject     Reject a Planning or Issue publication gate for revision
   heracles retry      Retry a failed or blocked issue attempt
@@ -43,6 +45,7 @@ type Options struct {
 	WorkingDirectory string
 	DoctorSystem     doctor.System
 	Control          control.Surface
+	Input            io.Reader
 }
 
 // Run executes the Heracles CLI and returns a process exit code.
@@ -70,6 +73,10 @@ func RunWithOptions(args []string, stdout, stderr io.Writer, options Options) in
 		return 0
 	}
 
+	if args[0] == "mcp" {
+		return runMCP(args[1:], stdout, stderr, options)
+	}
+
 	for _, command := range []string{"plan", "issues", "run", "labor", "list", "inspect", "approve", "reject", "retry", "resume", "cancel"} {
 		if args[0] == command {
 			return runControl(command, args[1:], stdout, stderr, options)
@@ -78,6 +85,43 @@ func RunWithOptions(args []string, stdout, stderr io.Writer, options Options) in
 
 	fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 	return 2
+}
+
+func runMCP(args []string, stdout, stderr io.Writer, options Options) int {
+	if len(args) == 0 || args[0] != "serve" {
+		fmt.Fprintln(stderr, "usage: heracles mcp serve [--config path]")
+		return 2
+	}
+	flags := flag.NewFlagSet("heracles mcp serve", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configPath := flags.String("config", "", "select Project Configuration path")
+	if err := flags.Parse(args[1:]); errors.Is(err, flag.ErrHelp) {
+		return 0
+	} else if err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "heracles mcp serve does not accept positional arguments")
+		return 2
+	}
+	surface := options.Control
+	owned := false
+	if surface == nil {
+		surface = control.NewDynamic(options.WorkingDirectory, *configPath)
+		owned = true
+	}
+	if owned {
+		defer surface.Close()
+	}
+	input := options.Input
+	if input == nil {
+		input = os.Stdin
+	}
+	if err := (mcp.Server{Surface: surface, Version: buildinfo.String()}).Serve(context.Background(), input, stdout); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
 }
 
 func runControl(command string, args []string, stdout, stderr io.Writer, options Options) int {

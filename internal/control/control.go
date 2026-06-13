@@ -8,13 +8,15 @@ import (
 
 // Operation is one typed Control Surface request shared by CLI and MCP.
 type Operation struct {
-	Name     string `json:"name"`
-	Kind     string `json:"kind,omitempty"`
-	ID       string `json:"id,omitempty"`
-	Problem  string `json:"problem,omitempty"`
-	PRD      string `json:"prd,omitempty"`
-	Decision string `json:"decision,omitempty"`
-	Reason   string `json:"reason,omitempty"`
+	Name         string   `json:"name"`
+	Kind         string   `json:"kind,omitempty"`
+	ID           string   `json:"id,omitempty"`
+	Problem      string   `json:"problem,omitempty"`
+	PRD          string   `json:"prd,omitempty"`
+	Decision     string   `json:"decision,omitempty"`
+	Reason       string   `json:"reason,omitempty"`
+	Tracker      string   `json:"tracker,omitempty"`
+	Repositories []string `json:"repositories,omitempty"`
 }
 
 // Result is one stable machine-readable Control Surface outcome.
