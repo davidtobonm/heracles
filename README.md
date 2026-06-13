@@ -92,3 +92,17 @@ The GitHub Issue Tracker uses explicit shared state labels:
 - `heracles:tdd-exempt`
 
 Only open `heracles:ready` issues without HITL or unresolved dependency state are eligible for unattended execution. Dependencies belong under `## Blocked by` as full `https://github.com/<owner>/<repo>/issues/<number>` URLs, allowing work to depend on issues in other repositories. Claim, block, and completion transitions preserve unrelated labels and publish shared status comments.
+
+## Issue Workspaces
+
+Each issue runs in a coordinated Issue Workspace with one temporary Git worktree per Target Repository. The default lifecycle policy is:
+
+```yaml
+workspaces:
+  root: .heracles/workspaces
+  cleanup_success: true
+  preserve_failed: true
+  preserve_blocked: true
+```
+
+Original working copies may remain dirty and on their current branches. Heracles records baseline commits, detects both committed and uncommitted issue changes, preserves failed or blocked work for inspection and resume, and removes successful worktrees according to policy.

@@ -106,6 +106,12 @@ func Initialize(ctx context.Context, options InitOptions) (InitResult, error) {
 				},
 			},
 		},
+		Workspaces: WorkspaceConfig{
+			Root:            ".heracles/workspaces",
+			CleanupSuccess:  true,
+			PreserveFailed:  true,
+			PreserveBlocked: true,
+		},
 	}
 	if err := validate(config); err != nil {
 		return InitResult{}, err
