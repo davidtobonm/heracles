@@ -80,6 +80,17 @@ agents:
 
 Heracles supports Codex, Claude Code, OpenCode, and Kimi Code. Provider-specific model, effort, and variant settings are validated instead of silently ignored. Run `heracles doctor` before a Labor to validate the Project Configuration, Target Repositories, GitHub authentication, Agent Profiles, capabilities, and required executables. Diagnostics never invoke a paid agent session.
 
+## Planning Stage
+
+The independently runnable Planning Stage gives the configured Planner every Target Repository workspace and relevant existing documentation. It clarifies a problem within a soft Question Budget, asks for only necessary documentation updates, persists its PRD under `.heracles/planning/<stage-id>/PRD.md`, and pauses at a durable Approval Gate.
+
+```yaml
+planning:
+  question_budget: 20
+```
+
+Planning may finish before the budget is exhausted. Questions beyond the budget remain pending until a user explicitly permits them. Approval completes the stage; rejection returns the same durable stage to revision without replaying already committed agent work.
+
 ## Heracles-Compatible Issues
 
 The GitHub Issue Tracker uses explicit shared state labels:

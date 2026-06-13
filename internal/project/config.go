@@ -18,6 +18,7 @@ type Config struct {
 	Workspaces   WorkspaceConfig    `yaml:"workspaces,omitempty"`
 	Labor        LaborConfig        `yaml:"labor,omitempty"`
 	Delivery     DeliveryConfig     `yaml:"delivery,omitempty"`
+	Planning     PlanningConfig     `yaml:"planning,omitempty"`
 }
 
 // IssueTrackerConfig identifies the GitHub repository whose issues define work.
@@ -79,6 +80,11 @@ type LaborConfig struct {
 type DeliveryConfig struct {
 	AutoMerge  bool     `yaml:"auto_merge"`
 	MergeOrder []string `yaml:"merge_order,omitempty"`
+}
+
+// PlanningConfig declares bounded clarification policy.
+type PlanningConfig struct {
+	QuestionBudget int `yaml:"question_budget,omitempty"`
 }
 
 // LoadedConfig is a validated Project Configuration and its location.
@@ -212,6 +218,9 @@ func validate(config Config) error {
 			return fmt.Errorf("delivery merge_order contains duplicate Target Repository %q", name)
 		}
 		mergeNames[name] = struct{}{}
+	}
+	if config.Planning.QuestionBudget < 0 {
+		return errors.New("planning.question_budget cannot be negative")
 	}
 	return nil
 }
