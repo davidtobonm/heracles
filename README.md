@@ -79,3 +79,16 @@ agents:
 ```
 
 Heracles supports Codex, Claude Code, OpenCode, and Kimi Code. Provider-specific model, effort, and variant settings are validated instead of silently ignored. Run `heracles doctor` before a Labor to validate the Project Configuration, Target Repositories, GitHub authentication, Agent Profiles, capabilities, and required executables. Diagnostics never invoke a paid agent session.
+
+## Heracles-Compatible Issues
+
+The GitHub Issue Tracker uses explicit shared state labels:
+
+- `heracles:ready`
+- `heracles:blocked`
+- `heracles:in-progress`
+- `heracles:done`
+- `heracles:hitl`
+- `heracles:tdd-exempt`
+
+Only open `heracles:ready` issues without HITL or unresolved dependency state are eligible for unattended execution. Dependencies belong under `## Blocked by` as full `https://github.com/<owner>/<repo>/issues/<number>` URLs, allowing work to depend on issues in other repositories. Claim, block, and completion transitions preserve unrelated labels and publish shared status comments.
