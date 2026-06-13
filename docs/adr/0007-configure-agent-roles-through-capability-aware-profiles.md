@@ -1,0 +1,3 @@
+# Configure agent roles through capability-aware profiles
+
+Planner, Issue Author, Implementer, and Reviewer will each select an Agent Profile, with inheritance from a default profile to avoid repetitive configuration. Profiles may specify CLI provider, model, effort or variant when supported, extra arguments, timeout, and an environment-variable allowlist. `heracles doctor` will fail on unsupported settings instead of silently ignoring them. Initial adapters will cover Codex, Claude Code, OpenCode, and Kimi Code; Antigravity support will remain unavailable until its non-interactive interface can be verified.
