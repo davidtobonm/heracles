@@ -1,0 +1,29 @@
+version: 1
+issue_tracker:
+  github: acme/app
+repositories:
+  - name: app
+    path: .
+    github: acme/app
+    base_branch: main
+    verify:
+      - go test ./...
+agents:
+  default_profile: default
+  profiles:
+    default:
+      provider: codex
+      timeout: 1h
+      env_allowlist: [PATH, HOME]
+      concurrency: 1
+workspaces:
+  root: .heracles/workspaces
+  cleanup_success: true
+  preserve_failed: true
+  preserve_blocked: true
+labor:
+  issue_concurrency: 1
+delivery:
+  auto_merge: false
+planning:
+  question_budget: 20

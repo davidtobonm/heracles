@@ -1,0 +1,36 @@
+version: 1
+issue_tracker:
+  github: acme/backend
+repositories:
+  - name: backend
+    path: ../backend
+    github: acme/backend
+    base_branch: main
+    verify:
+      - go test ./...
+  - name: frontend
+    path: ../frontend
+    github: acme/frontend
+    base_branch: main
+    verify:
+      - npm test
+agents:
+  default_profile: default
+  profiles:
+    default:
+      provider: codex
+      timeout: 1h
+      env_allowlist: [PATH, HOME]
+      concurrency: 1
+workspaces:
+  root: .heracles/workspaces
+  cleanup_success: true
+  preserve_failed: true
+  preserve_blocked: true
+labor:
+  issue_concurrency: 2
+delivery:
+  auto_merge: true
+  merge_order: [backend, frontend]
+planning:
+  question_budget: 20
