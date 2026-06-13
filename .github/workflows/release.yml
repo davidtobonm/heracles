@@ -12,8 +12,8 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.24.x"
           cache: true
@@ -32,8 +32,8 @@ jobs:
           - { goos: darwin, goarch: arm64, suffix: "" }
           - { goos: windows, goarch: amd64, suffix: ".exe" }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.24.x"
           cache: true
@@ -46,7 +46,7 @@ jobs:
           built="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           ldflags="-s -w -X github.com/davidtobonm/heracles/internal/buildinfo.version=${GITHUB_REF_NAME} -X github.com/davidtobonm/heracles/internal/buildinfo.commit=${GITHUB_SHA} -X github.com/davidtobonm/heracles/internal/buildinfo.built=${built}"
           go build -trimpath -ldflags "${ldflags}" -o "heracles-${GOOS}-${GOARCH}${{ matrix.target.suffix }}" ./cmd/heracles
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: heracles-${{ matrix.target.goos }}-${{ matrix.target.goarch }}
           path: heracles-*
@@ -56,13 +56,13 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
       - name: Generate checksums
         run: sha256sum dist/heracles-* > dist/checksums.txt
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/heracles-*
