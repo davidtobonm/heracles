@@ -14,12 +14,14 @@ import (
 )
 
 const (
-	LabelReady      = "heracles:ready"
-	LabelBlocked    = "heracles:blocked"
-	LabelInProgress = "heracles:in-progress"
-	LabelDone       = "heracles:done"
-	LabelHITL       = "heracles:hitl"
-	LabelTDDExempt  = "heracles:tdd-exempt"
+	LabelReady          = "heracles:ready"
+	LabelBlocked        = "heracles:blocked"
+	LabelInProgress     = "heracles:in-progress"
+	LabelDone           = "heracles:done"
+	LabelHITL           = "heracles:hitl"
+	LabelTDDExempt      = "heracles:tdd-exempt"
+	LabelImplementation = "heracles:implementation"
+	LabelObsolete       = "heracles:obsolete"
 )
 
 var (

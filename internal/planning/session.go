@@ -43,7 +43,7 @@ type InteractiveRunner interface {
 // IssueGenerator launches background, non-interactive issue generation for
 // an approved PRD Issue, per ADR 0015.
 type IssueGenerator interface {
-	Generate(ctx context.Context, id, prdPath string) error
+	Generate(ctx context.Context, id, prdIssueURL, prdPath string) error
 }
 
 // SessionRequest starts or resumes an interactive Planning session.
@@ -207,10 +207,10 @@ func (service SessionService) Decide(ctx context.Context, id, decision, reason s
 // startIssueGeneration launches the background Issue Author once and only
 // once a PRD Issue's Planning Approval Gate is approved, per ADR 0015.
 func (service SessionService) startIssueGeneration(ctx context.Context, state *SessionState) error {
-	if state.Status != StatusApproved || state.IssuesStarted || state.PRDPath == "" || service.Generator == nil {
+	if state.Status != StatusApproved || state.IssuesStarted || state.PRDPath == "" || state.PRDIssueURL == "" || service.Generator == nil {
 		return nil
 	}
-	if err := service.Generator.Generate(ctx, state.ID, state.PRDPath); err != nil {
+	if err := service.Generator.Generate(ctx, state.ID, state.PRDIssueURL, state.PRDPath); err != nil {
 		return fmt.Errorf("launch background issue generation: %w", err)
 	}
 	state.IssuesStarted = true
