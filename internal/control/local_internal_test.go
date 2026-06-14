@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +12,9 @@ import (
 	"github.com/davidtobonm/heracles/internal/history"
 	"github.com/davidtobonm/heracles/internal/implementation"
 	"github.com/davidtobonm/heracles/internal/issues"
+	"github.com/davidtobonm/heracles/internal/labor"
 	"github.com/davidtobonm/heracles/internal/planning"
+	"github.com/davidtobonm/heracles/internal/status"
 	"github.com/davidtobonm/heracles/internal/tracker"
 	"github.com/davidtobonm/heracles/internal/workspace"
 )
@@ -238,6 +241,58 @@ func TestExecuteIssuesStartsBackgroundGenerationForApprovedPRDIssue(t *testing.T
 	}
 	if !strings.Contains(string(contents), "Build it.") {
 		t.Errorf("approved PRD mirror = %q, want approved PRD Issue body", contents)
+	}
+}
+
+func TestExecuteStatusInspectsCurrentLaborWithoutMutation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	executionHistory, err := history.Open(ctx, root)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = executionHistory.Close() })
+
+	if _, err := executionHistory.CreateLabor(ctx, history.NewLabor{ID: "labor-1", Problem: "Build it", Status: labor.StatusImplementing}); err != nil {
+		t.Fatalf("CreateLabor() error = %v", err)
+	}
+	if err := labor.NewFileStore(root).Save(ctx, labor.State{ID: "labor-1", Problem: "Build it", Status: labor.StatusImplementing}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	statePath := filepath.Join(root, ".heracles", "labors", "labor-1", "state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	local := &Local{root: root, history: executionHistory}
+
+	result, err := local.Execute(ctx, Operation{Name: "status"})
+	if err != nil {
+		t.Fatalf("Execute(status) error = %v", err)
+	}
+	report, ok := result.Data.(status.Labor)
+	if !ok || report.ID != "labor-1" || report.Stage != labor.StatusImplementing {
+		t.Fatalf("result.Data = %#v, want status.Labor for labor-1", result.Data)
+	}
+
+	result, err = local.Execute(ctx, Operation{Name: "status", ID: "labor-1"})
+	if err != nil {
+		t.Fatalf("Execute(status, labor-1) error = %v", err)
+	}
+	report, ok = result.Data.(status.Labor)
+	if !ok || report.ID != "labor-1" {
+		t.Fatalf("result.Data = %#v, want status.Labor for labor-1", result.Data)
+	}
+
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf("heracles status mutated Labor state:\nbefore = %s\nafter  = %s", before, after)
 	}
 }
 

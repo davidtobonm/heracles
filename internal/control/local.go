@@ -26,6 +26,7 @@ import (
 	"github.com/davidtobonm/heracles/internal/review"
 	"github.com/davidtobonm/heracles/internal/scheduler"
 	"github.com/davidtobonm/heracles/internal/signal"
+	"github.com/davidtobonm/heracles/internal/status"
 	"github.com/davidtobonm/heracles/internal/tracker"
 	"github.com/davidtobonm/heracles/internal/workspace"
 )
@@ -233,6 +234,10 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 		}
 		state, err := service.Retry(ctx, operation.ID)
 		return result(operation, state.Status, state), err
+	case "status":
+		inspector := status.Inspector{History: local.history, Store: labor.NewFileStore(local.root)}
+		value, err := inspector.Inspect(ctx, operation.ID)
+		return result(operation, "ok", value), err
 	case "list":
 		value, err := local.list(ctx, operation.Kind)
 		return result(operation, "ok", value), err
