@@ -765,7 +765,11 @@ func controlSurface(options Options, explicitConfig string, launch map[string]pr
 	if err := applyPreferences(&loaded, options.HomeDirectory, launch); err != nil {
 		return nil, false, err
 	}
-	surface, err := control.NewLocal(context.Background(), loaded)
+	system := options.DoctorSystem
+	if system == nil {
+		system = doctor.OSSystem{}
+	}
+	surface, err := control.NewLocalWithSystem(context.Background(), loaded, system)
 	return surface, true, err
 }
 
@@ -773,6 +777,7 @@ func runDoctor(args []string, stdout, stderr io.Writer, options Options) int {
 	flags := flag.NewFlagSet("heracles doctor", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "select Project Configuration path")
+	fix := flags.Bool("fix", false, "perform safe repairs for missing Tracker labels and the Issue Workspace root")
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return 0
 	} else if err != nil {
@@ -801,7 +806,12 @@ func runDoctor(args []string, stdout, stderr io.Writer, options Options) int {
 	if system == nil {
 		system = doctor.OSSystem{}
 	}
-	report := doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+	var report doctor.Report
+	if *fix {
+		report = doctor.FixProject(context.Background(), loaded, agent.DefaultRegistry(), system)
+	} else {
+		report = doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+	}
 	fmt.Fprint(stdout, report.String())
 	if !report.OK {
 		return 1

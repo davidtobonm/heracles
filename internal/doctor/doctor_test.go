@@ -2,7 +2,9 @@ package doctor_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -56,6 +58,9 @@ type fakeSystem struct {
 	missing map[string]error
 	runErr  map[string]error
 	output  map[string]string
+	// outputs returns canned output keyed by the full "command arg1 arg2..."
+	// invocation, taking precedence over output when present.
+	outputs map[string]string
 	calls   []string
 }
 
@@ -72,7 +77,11 @@ func (system *fakeSystem) Run(_ context.Context, command string, args ...string)
 }
 
 func (system *fakeSystem) Output(_ context.Context, command string, args ...string) (string, error) {
-	system.calls = append(system.calls, command+" "+strings.Join(args, " "))
+	call := strings.TrimSpace(command + " " + strings.Join(args, " "))
+	system.calls = append(system.calls, call)
+	if value, ok := system.outputs[call]; ok {
+		return value, system.runErr[command]
+	}
 	return system.output[command], system.runErr[command]
 }
 
@@ -187,5 +196,238 @@ func TestCheckReportsUnavailableOpenCodeModel(t *testing.T) {
 	}
 	if !strings.Contains(report.String(), `opencode model "kimi-k2.6" is unavailable`) {
 		t.Fatalf("report %q does not contain opencode model guidance", report.String())
+	}
+}
+
+func allLabelsJSON(t *testing.T, present ...string) string {
+	t.Helper()
+	type entry struct {
+		Name string `json:"name"`
+	}
+	names := doctor.RequiredLabels
+	if len(present) > 0 {
+		names = present
+	}
+	entries := make([]entry, len(names))
+	for index, name := range names {
+		entries[index] = entry{Name: name}
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	return string(data)
+}
+
+func baseLoadedConfig(root string) project.LoadedConfig {
+	return project.LoadedConfig{
+		Path: filepath.Join(root, "heracles.yaml"),
+		Config: project.Config{
+			Version:      1,
+			IssueTracker: project.IssueTrackerConfig{GitHub: "acme/backlog"},
+			Repositories: []project.RepositoryConfig{{Name: "app", Path: ".", GitHub: "acme/app", BaseBranch: "main"}},
+			Agents: project.AgentConfig{
+				DefaultProfile: "default",
+				Profiles:       map[string]project.ProfileConfig{"default": {Provider: "codex"}},
+			},
+		},
+	}
+}
+
+func TestCheckReportsMissingTrackerLabelsAsFixableBlocker(t *testing.T) {
+	t.Parallel()
+
+	loaded := baseLoadedConfig(t.TempDir())
+	system := &fakeSystem{outputs: map[string]string{
+		"gh label list --repo acme/backlog --json name --limit 100": allLabelsJSON(t, "heracles:ready"),
+	}}
+
+	report := doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+
+	if report.OK {
+		t.Fatal("Check() report is OK, want missing tracker labels to block")
+	}
+	if !strings.Contains(report.String(), "[failed] Tracker Labels") || !strings.Contains(report.String(), "heracles:blocked") {
+		t.Errorf("report = %q, want failed Tracker Labels listing missing labels", report.String())
+	}
+	if !strings.Contains(report.String(), "heracles doctor --fix") {
+		t.Errorf("report = %q, want a pointer to `heracles doctor --fix`", report.String())
+	}
+}
+
+func TestCheckReportsTrackerLabelsOKWhenAllPresent(t *testing.T) {
+	t.Parallel()
+
+	loaded := baseLoadedConfig(t.TempDir())
+	system := &fakeSystem{outputs: map[string]string{
+		"gh label list --repo acme/backlog --json name --limit 100": allLabelsJSON(t),
+	}}
+
+	report := doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+
+	if !strings.Contains(report.String(), "[ok] Tracker Labels: all required labels exist") {
+		t.Errorf("report = %q, want OK Tracker Labels", report.String())
+	}
+}
+
+func TestCheckReportsMissingBaseBranchAsBlocker(t *testing.T) {
+	t.Parallel()
+
+	loaded := baseLoadedConfig(t.TempDir())
+	system := &fakeSystem{
+		outputs: map[string]string{"gh label list --repo acme/backlog --json name --limit 100": allLabelsJSON(t)},
+		runErr:  map[string]error{"git": errors.New("not a valid ref")},
+	}
+
+	report := doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+
+	if report.OK {
+		t.Fatal("Check() report is OK, want missing base branch to block")
+	}
+	if !strings.Contains(report.String(), "[failed] Target Repository app base branch: not a valid ref") {
+		t.Errorf("report = %q, want failed base branch diagnostic", report.String())
+	}
+}
+
+func TestCheckReportsMissingVerificationCommandAsBlocker(t *testing.T) {
+	t.Parallel()
+
+	loaded := baseLoadedConfig(t.TempDir())
+	loaded.Config.Repositories[0].Verify = []string{"make test"}
+	system := &fakeSystem{
+		outputs: map[string]string{"gh label list --repo acme/backlog --json name --limit 100": allLabelsJSON(t)},
+		missing: map[string]error{"make": errors.New("not installed")},
+	}
+
+	report := doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+
+	if report.OK {
+		t.Fatal("Check() report is OK, want missing verification command to block")
+	}
+	if !strings.Contains(report.String(), `[failed] Repository app verification command "make"`) {
+		t.Errorf("report = %q, want failed verification command diagnostic", report.String())
+	}
+}
+
+func TestCheckReportsMissingVerificationEnvironmentVariableAsBlocker(t *testing.T) {
+	t.Parallel()
+
+	loaded := baseLoadedConfig(t.TempDir())
+	loaded.Config.Repositories[0].VerifyEnv = []string{"HERACLES_DOCTOR_TEST_MISSING_VAR"}
+	system := &fakeSystem{outputs: map[string]string{
+		"gh label list --repo acme/backlog --json name --limit 100": allLabelsJSON(t),
+	}}
+
+	report := doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+
+	if report.OK {
+		t.Fatal("Check() report is OK, want missing verification environment variable to block")
+	}
+	if !strings.Contains(report.String(), "[failed] Repository app verification environment") || !strings.Contains(report.String(), "HERACLES_DOCTOR_TEST_MISSING_VAR") {
+		t.Errorf("report = %q, want failed verification environment diagnostic", report.String())
+	}
+}
+
+func TestCheckWarnsWhenAutoMergeNotAllowedWithoutBlocking(t *testing.T) {
+	t.Parallel()
+
+	loaded := baseLoadedConfig(t.TempDir())
+	loaded.Config.Delivery.AutoMerge = true
+	system := &fakeSystem{outputs: map[string]string{
+		"gh label list --repo acme/backlog --json name --limit 100": allLabelsJSON(t),
+		"gh repo view acme/app --json autoMergeAllowed":             `{"autoMergeAllowed":false}`,
+		"gh api repos/acme/app/actions/workflows --jq .total_count": "1",
+	}}
+
+	report := doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+
+	if !report.OK {
+		t.Fatalf("Check() report is not OK, want auto-merge to only warn:\n%s", report.String())
+	}
+	if !strings.Contains(report.String(), "[warn] Repository app auto-merge") {
+		t.Errorf("report = %q, want auto-merge warning", report.String())
+	}
+}
+
+func TestCheckWarnsWhenNoCIWorkflowsConfiguredWithoutBlocking(t *testing.T) {
+	t.Parallel()
+
+	loaded := baseLoadedConfig(t.TempDir())
+	system := &fakeSystem{outputs: map[string]string{
+		"gh label list --repo acme/backlog --json name --limit 100": allLabelsJSON(t),
+		"gh api repos/acme/app/actions/workflows --jq .total_count": "0",
+	}}
+
+	report := doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+
+	if !report.OK {
+		t.Fatalf("Check() report is not OK, want missing CI to only warn:\n%s", report.String())
+	}
+	if !strings.Contains(report.String(), "[warn] Repository app CI: no GitHub Actions workflows configured") {
+		t.Errorf("report = %q, want CI warning", report.String())
+	}
+}
+
+func TestCheckWarnsAboutMissingWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+
+	loaded := baseLoadedConfig(t.TempDir())
+	system := &fakeSystem{outputs: map[string]string{
+		"gh label list --repo acme/backlog --json name --limit 100": allLabelsJSON(t),
+		"gh api repos/acme/app/actions/workflows --jq .total_count": "1",
+	}}
+
+	report := doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+
+	if !report.OK {
+		t.Fatalf("Check() report is not OK, want missing workspace root to only warn:\n%s", report.String())
+	}
+	if !strings.Contains(report.String(), "[warn] Workspaces") || !strings.Contains(report.String(), "heracles doctor --fix") {
+		t.Errorf("report = %q, want workspace root warning pointing to --fix", report.String())
+	}
+}
+
+func TestFixProjectCreatesMissingWorkspaceRootAndTrackerLabels(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	loaded := baseLoadedConfig(root)
+	system := &fakeSystem{outputs: map[string]string{
+		"gh label list --repo acme/backlog --json name --limit 100": allLabelsJSON(t, "heracles:ready"),
+		"gh api repos/acme/app/actions/workflows --jq .total_count": "1",
+	}}
+
+	report := doctor.FixProject(context.Background(), loaded, agent.DefaultRegistry(), system)
+
+	if _, err := os.Stat(filepath.Join(root, ".heracles", "workspaces")); err != nil {
+		t.Errorf("FixProject() did not create the workspace root: %v", err)
+	}
+	var created []string
+	for _, call := range system.calls {
+		if strings.HasPrefix(call, "gh label create ") {
+			created = append(created, call)
+		}
+	}
+	if len(created) != len(doctor.RequiredLabels)-1 {
+		t.Errorf("FixProject() created %d labels, want %d:\n%v", len(created), len(doctor.RequiredLabels)-1, created)
+	}
+	if !strings.Contains(report.String(), "[ok] Workspaces") {
+		t.Errorf("report = %q, want Workspaces repaired", report.String())
+	}
+}
+
+func TestReportStringDistinguishesWarningsFromFailures(t *testing.T) {
+	t.Parallel()
+
+	report := doctor.Report{Checks: []doctor.Diagnostic{
+		{Name: "a", OK: true, Message: "fine"},
+		{Name: "b", Warning: true, Message: "be careful"},
+		{Name: "c", Message: "broken"},
+	}}
+
+	for _, expected := range []string{"[ok] a: fine", "[warn] b: be careful", "[failed] c: broken"} {
+		if !strings.Contains(report.String(), expected) {
+			t.Errorf("report = %q, want %q", report.String(), expected)
+		}
 	}
 }

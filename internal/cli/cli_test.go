@@ -686,7 +686,8 @@ func TestInitWithoutFlagsRunsInteractiveSetup(t *testing.T) {
 type fakeInitDoctorSystem struct{}
 
 func (fakeInitDoctorSystem) LookPath(executable string) (string, error) {
-	if executable == "git" || executable == "gh" || executable == "codex" {
+	switch executable {
+	case "git", "gh", "codex", "gofmt", "go":
 		return "/usr/bin/" + executable, nil
 	}
 	return "", os.ErrNotExist
@@ -760,6 +761,114 @@ agents:
 	}
 }
 
+func TestDoctorFixCreatesMissingWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	config := `version: 1
+issue_tracker:
+  github: example/widget
+repositories:
+  - name: widget
+    path: .
+    github: example/widget
+    base_branch: main
+agents:
+  default_profile: default
+  profiles:
+    default:
+      provider: codex
+  roles: {}
+`
+	if err := os.WriteFile(filepath.Join(root, "heracles.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("write Project Configuration: %v", err)
+	}
+
+	var before bytes.Buffer
+	var beforeErr bytes.Buffer
+	exitCode := cli.RunWithOptions([]string{"doctor"}, &before, &beforeErr, cli.Options{
+		WorkingDirectory: root,
+		DoctorSystem:     cliFakeSystem{},
+	})
+	if exitCode != 0 {
+		t.Fatalf("RunWithOptions(doctor) exit code = %d, want 0; stderr = %q", exitCode, beforeErr.String())
+	}
+	if !strings.Contains(before.String(), "[warn] Workspaces") {
+		t.Fatalf("doctor output %q does not contain workspace warning", before.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, ".heracles", "workspaces")); !os.IsNotExist(err) {
+		t.Fatalf("workspace root exists before --fix: %v", err)
+	}
+
+	var after bytes.Buffer
+	var afterErr bytes.Buffer
+	exitCode = cli.RunWithOptions([]string{"doctor", "--fix"}, &after, &afterErr, cli.Options{
+		WorkingDirectory: root,
+		DoctorSystem:     cliFakeSystem{},
+	})
+	if exitCode != 0 {
+		t.Fatalf("RunWithOptions(doctor --fix) exit code = %d, want 0; stderr = %q", exitCode, afterErr.String())
+	}
+	if !strings.Contains(after.String(), "[ok] Workspaces") {
+		t.Errorf("doctor --fix output %q does not contain repaired workspace diagnostic", after.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, ".heracles", "workspaces")); err != nil {
+		t.Errorf("doctor --fix did not create the workspace root: %v", err)
+	}
+}
+
+func TestLaborAndRunAreBlockedByFailingDoctorPreflight(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	config := `version: 1
+issue_tracker:
+  github: example/widget
+repositories:
+  - name: widget
+    path: .
+    github: example/widget
+    base_branch: main
+agents:
+  default_profile: default
+  profiles:
+    default:
+      provider: codex
+  roles: {}
+`
+	if err := os.WriteFile(filepath.Join(root, "heracles.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("write Project Configuration: %v", err)
+	}
+
+	system := blockingCLIDoctorSystem{}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := cli.RunWithOptions([]string{"labor", "Build it"}, &stdout, &stderr, cli.Options{
+		WorkingDirectory: root,
+		DoctorSystem:     system,
+	})
+	if exitCode != 1 {
+		t.Fatalf("RunWithOptions(labor) exit code = %d, want 1; stdout = %q", exitCode, stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Doctor preflight failed") {
+		t.Errorf("stderr = %q, want Doctor preflight failure", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = cli.RunWithOptions([]string{"run", "--yes"}, &stdout, &stderr, cli.Options{
+		WorkingDirectory: root,
+		DoctorSystem:     system,
+	})
+	if exitCode != 1 {
+		t.Fatalf("RunWithOptions(run --yes) exit code = %d, want 1; stdout = %q", exitCode, stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Doctor preflight failed") {
+		t.Errorf("stderr = %q, want Doctor preflight failure", stderr.String())
+	}
+}
+
 func TestVersionReportsBuildMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -805,6 +914,25 @@ func (cliFakeSystem) Run(context.Context, string, ...string) error {
 }
 
 func (cliFakeSystem) Output(context.Context, string, ...string) (string, error) {
+	return "", nil
+}
+
+// blockingCLIDoctorSystem reports git as missing, a Doctor blocker per ADR
+// 0027 that must stop heracles labor/run before they execute.
+type blockingCLIDoctorSystem struct{}
+
+func (blockingCLIDoctorSystem) LookPath(executable string) (string, error) {
+	if executable == "git" {
+		return "", os.ErrNotExist
+	}
+	return "/fake/" + executable, nil
+}
+
+func (blockingCLIDoctorSystem) Run(context.Context, string, ...string) error {
+	return nil
+}
+
+func (blockingCLIDoctorSystem) Output(context.Context, string, ...string) (string, error) {
 	return "", nil
 }
 
