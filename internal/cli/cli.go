@@ -37,7 +37,7 @@ Usage:
 
 Available Commands:
   heracles plan       Run or resume a Planning Stage
-  heracles issues     Run or resume an Issue Stage
+  heracles issues     Generate and reconcile a PRD Issue's implementation issues
   heracles run        Run the defined Implementation Stage backlog
   heracles labor      Start or resume an end-to-end Labor
   heracles list       List durable Labors, issues, Change Sets, gates, logs, or evidence
@@ -218,6 +218,14 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 			return 2
 		}
 		operation.ID = positionals[0]
+	case "issues":
+		if len(positionals) > 1 {
+			fmt.Fprintln(stderr, "heracles issues accepts at most one PRD Issue URL")
+			return 2
+		}
+		if len(positionals) == 1 {
+			operation.PRDIssueURL = positionals[0]
+		}
 	default:
 		if len(positionals) != 0 {
 			fmt.Fprintf(stderr, "heracles %s does not accept positional arguments\n", command)
@@ -225,13 +233,23 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 		}
 	}
 	if command == "issues" {
-		if *prdPath != "" {
+		if operation.PRDIssueURL != "" {
+			if *id != "" || *prdPath != "" || *prdIssueURL != "" {
+				fmt.Fprintln(stderr, "heracles issues <prd-issue-url> does not accept --id, --prd, or --prd-issue")
+				return 2
+			}
+		} else {
+			if *id == "" || *prdPath == "" || *prdIssueURL == "" {
+				fmt.Fprintln(stderr, "heracles issues requires --id, --prd, and --prd-issue, or a PRD Issue URL")
+				return 2
+			}
 			contents, err := os.ReadFile(*prdPath)
 			if err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1
 			}
 			operation.PRD = string(contents)
+			operation.PRDIssueURL = *prdIssueURL
 		}
 	}
 	if command == "plan" {
@@ -246,8 +264,8 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 		fmt.Fprintln(stderr, "heracles labor requires --id and --problem")
 		return 2
 	}
-	if (command == "plan" || command == "issues") && operation.ID == "" {
-		fmt.Fprintf(stderr, "heracles %s requires --id\n", command)
+	if command == "plan" && operation.ID == "" {
+		fmt.Fprintln(stderr, "heracles plan requires --id")
 		return 2
 	}
 

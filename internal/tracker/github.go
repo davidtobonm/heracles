@@ -103,6 +103,31 @@ func (client *GitHubClient) Comment(ctx context.Context, reference Reference, bo
 	return err
 }
 
+// CreateIssue publishes a new issue and returns its full GitHub URL.
+func (client *GitHubClient) CreateIssue(ctx context.Context, repository, title, body string, labels []string) (string, error) {
+	args := []string{"issue", "create", "--repo", repository, "--title", title, "--body", body}
+	for _, label := range labels {
+		args = append(args, "--label", label)
+	}
+	output, err := client.runner.Run(ctx, "gh", args...)
+	if err != nil {
+		return "", err
+	}
+	url := strings.TrimSpace(string(output))
+	if !strings.HasPrefix(url, "https://github.com/"+repository+"/issues/") {
+		return "", fmt.Errorf("GitHub CLI returned invalid created issue URL %q", url)
+	}
+	return url, nil
+}
+
+// UpdateIssue replaces an existing issue's title, body, and labels.
+func (client *GitHubClient) UpdateIssue(ctx context.Context, reference Reference, title, body string, labels []string) error {
+	if _, err := client.runner.Run(ctx, "gh", "issue", "edit", strconv.Itoa(reference.Number), "--repo", reference.Repository(), "--title", title, "--body", body); err != nil {
+		return err
+	}
+	return client.SetLabels(ctx, reference, labels)
+}
+
 type githubIssue struct {
 	Number    int    `json:"number"`
 	Title     string `json:"title"`

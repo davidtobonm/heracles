@@ -24,12 +24,12 @@ func (runner *recordingInteractiveRunner) RunInteractive(_ context.Context, _ ag
 }
 
 type recordingIssueGenerator struct {
-	calls []struct{ id, prdPath string }
+	calls []struct{ id, prdIssueURL, prdPath string }
 	err   error
 }
 
-func (generator *recordingIssueGenerator) Generate(_ context.Context, id, prdPath string) error {
-	generator.calls = append(generator.calls, struct{ id, prdPath string }{id, prdPath})
+func (generator *recordingIssueGenerator) Generate(_ context.Context, id, prdIssueURL, prdPath string) error {
+	generator.calls = append(generator.calls, struct{ id, prdIssueURL, prdPath string }{id, prdIssueURL, prdPath})
 	return generator.err
 }
 
@@ -162,7 +162,7 @@ func TestDecideApprovalLaunchesBackgroundIssueGenerationOnce(t *testing.T) {
 	if state.Status != planning.StatusApproved || state.Gate.Status != planning.GateApproved || !state.IssuesStarted {
 		t.Fatalf("state = %#v, want approved with issue generation started", state)
 	}
-	if len(generator.calls) != 1 || generator.calls[0].id != "session-1" || generator.calls[0].prdPath != ".heracles/planning/session-1/PRD.md" {
+	if len(generator.calls) != 1 || generator.calls[0].id != "session-1" || generator.calls[0].prdIssueURL != "https://github.com/acme/backlog/issues/9" || generator.calls[0].prdPath != ".heracles/planning/session-1/PRD.md" {
 		t.Fatalf("Generate() calls = %#v, want one call for session-1", generator.calls)
 	}
 

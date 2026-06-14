@@ -16,9 +16,11 @@ import (
 	"github.com/davidtobonm/heracles/internal/doctor"
 	"github.com/davidtobonm/heracles/internal/history"
 	"github.com/davidtobonm/heracles/internal/implementation"
+	"github.com/davidtobonm/heracles/internal/issues"
 	"github.com/davidtobonm/heracles/internal/issuestage"
 	"github.com/davidtobonm/heracles/internal/labor"
 	"github.com/davidtobonm/heracles/internal/planning"
+	"github.com/davidtobonm/heracles/internal/prd"
 	"github.com/davidtobonm/heracles/internal/project"
 	"github.com/davidtobonm/heracles/internal/scheduler"
 	"github.com/davidtobonm/heracles/internal/tracker"
@@ -36,6 +38,8 @@ type Local struct {
 	planning           planning.Service
 	planningSession    planning.SessionService
 	issues             issuestage.Service
+	issuesService      issues.Service
+	issueGenerator     planning.IssueGenerator
 	workspaces         workspace.Manager
 	implementer        implementation.Implementer
 	reviewer           implementation.Reviewer
@@ -76,6 +80,7 @@ func NewLocal(ctx context.Context, loaded project.LoadedConfig) (*Local, error) 
 		verificationRepositories = append(verificationRepositories, delivery.Repository{Name: repository.Name, Path: path, Verify: repository.Verify, VerifyEnv: repository.VerifyEnv})
 		changeRepositories = append(changeRepositories, changeset.Repository{Name: repository.Name, GitHub: repository.GitHub, Base: repository.BaseBranch})
 	}
+	issueGenerator := backgroundIssueGenerator{configPath: loaded.Path, root: root}
 	local := &Local{
 		root:          root,
 		loaded:        loaded,
@@ -90,13 +95,18 @@ func NewLocal(ctx context.Context, loaded project.LoadedConfig) (*Local, error) 
 		planningSession: planning.SessionService{
 			Runner:         planning.InteractiveAgentRunner{Runner: runner},
 			Store:          planning.NewFileStore(root),
-			Generator:      backgroundIssueGenerator{configPath: loaded.Path, root: root},
+			Generator:      issueGenerator,
 			QuestionBudget: loaded.Config.Planning.QuestionBudget,
 			Profile:        profiles.Roles[agent.RolePlanner],
 		},
+		issueGenerator: issueGenerator,
 		issues: issuestage.Service{
 			Author: issuestage.AgentIssueAuthor{Runner: runner, Profile: profiles.Roles[agent.RoleIssueAuthor], Workspaces: contextPaths(repositoryContexts)},
 			Store:  issuestage.NewFileStore(root), Publisher: issuestage.NewGitHubPublisher(commandRunner),
+		},
+		issuesService: issues.Service{
+			Author:  issues.AgentIssueAuthor{Runner: runner, Profile: profiles.Roles[agent.RoleIssueAuthor], Workspaces: contextPaths(repositoryContexts)},
+			Tracker: trackerClient, Store: issues.NewFileStore(root),
 		},
 		workspaces: workspace.Manager{
 			Root: loaded.WorkspaceRoot(), Repositories: workspaceRepositories,
@@ -149,7 +159,13 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 		})
 		return result(operation, state.Status, state), err
 	case "issues":
-		state, err := local.issues.Run(ctx, issuestage.RunRequest{ID: operation.ID, ApprovedPRD: operation.PRD, TrackerRepository: local.trackerRepository()})
+		if operation.ID == "" {
+			state, err := local.generateIssuesForPRDIssue(ctx, operation.PRDIssueURL)
+			return result(operation, state.Status, state), err
+		}
+		state, err := local.issuesService.Generate(ctx, issues.GenerateRequest{
+			ID: operation.ID, ParentPRDURL: operation.PRDIssueURL, ApprovedPRD: operation.PRD, TrackerRepository: local.trackerRepository(),
+		})
 		return result(operation, state.Status, state), err
 	case "run":
 		backlog := local.backlog("implementation-direct", "")
@@ -479,6 +495,38 @@ func (local *Local) repositoryContexts() []planning.RepositoryContext {
 	return contexts
 }
 
+// generateIssuesForPRDIssue starts background issue generation for one
+// approved PRD Issue and returns immediately, per ADR 0024's standalone
+// `heracles issues <prd-issue-url>` form.
+func (local *Local) generateIssuesForPRDIssue(ctx context.Context, prdIssueURL string) (issues.State, error) {
+	if prdIssueURL == "" {
+		return issues.State{}, errors.New("heracles issues requires a published PRD Issue URL")
+	}
+	reference, err := tracker.ParseReference(prdIssueURL)
+	if err != nil {
+		return issues.State{}, err
+	}
+	issue, err := local.trackerClient.Issue(ctx, reference)
+	if err != nil {
+		return issues.State{}, err
+	}
+	if !slices.Contains(issue.Labels, prd.LabelPRD) || !slices.Contains(issue.Labels, prd.LabelApproved) {
+		return issues.State{}, fmt.Errorf("PRD Issue %s must be labeled %q and %q", prdIssueURL, prd.LabelPRD, prd.LabelApproved)
+	}
+	id := fmt.Sprintf("prd-%s-%s-%d", reference.Owner, reference.Repo, reference.Number)
+	prdPath := filepath.Join(local.root, ".heracles", "issues", id, "PRD.md")
+	if err := os.MkdirAll(filepath.Dir(prdPath), 0o755); err != nil {
+		return issues.State{}, fmt.Errorf("create issue generation directory: %w", err)
+	}
+	if err := os.WriteFile(prdPath, []byte(issue.Body), 0o644); err != nil {
+		return issues.State{}, fmt.Errorf("write approved PRD mirror: %w", err)
+	}
+	if err := local.issueGenerator.Generate(ctx, id, prdIssueURL, prdPath); err != nil {
+		return issues.State{}, err
+	}
+	return issues.State{ID: id, ParentPRDURL: prdIssueURL, Status: issues.StatusStarted}, nil
+}
+
 // backgroundIssueGenerator launches `heracles issues` as a detached
 // background process once a PRD Issue's Planning Approval Gate is approved,
 // per ADR 0015. Heracles records the issue generation log under the
@@ -488,12 +536,12 @@ type backgroundIssueGenerator struct {
 	root       string
 }
 
-func (generator backgroundIssueGenerator) Generate(_ context.Context, id, prdPath string) error {
+func (generator backgroundIssueGenerator) Generate(_ context.Context, id, prdIssueURL, prdPath string) error {
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate heracles executable: %w", err)
 	}
-	args := []string{"issues", "--id", id, "--prd", prdPath}
+	args := []string{"issues", "--id", id, "--prd", prdPath, "--prd-issue", prdIssueURL}
 	if generator.configPath != "" {
 		args = append(args, "--config", generator.configPath)
 	}

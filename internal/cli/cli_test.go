@@ -120,6 +120,77 @@ func TestPlanCommandRejectsPRDIssueWithoutLocalPRDPath(t *testing.T) {
 	}
 }
 
+func TestIssuesCommandAcceptsPRDIssueURL(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"issues", "https://github.com/acme/backlog/issues/9"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 0 {
+		t.Fatalf("issues exit = %d, want 0; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 1 {
+		t.Fatalf("operations = %#v", surface.operations)
+	}
+	operation := surface.operations[0]
+	if operation.Name != "issues" || operation.PRDIssueURL != "https://github.com/acme/backlog/issues/9" || operation.ID != "" || operation.PRD != "" {
+		t.Errorf("operation = %#v, want only a PRD Issue URL", operation)
+	}
+}
+
+func TestIssuesCommandRejectsPRDIssueURLWithOtherFlags(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"issues", "https://github.com/acme/backlog/issues/9", "--id", "prd-9"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 2 {
+		t.Fatalf("issues exit = %d, want 2; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 0 {
+		t.Errorf("operations = %#v, want no Control Surface call", surface.operations)
+	}
+}
+
+func TestIssuesCommandRequiresIDPRDAndPRDIssueWithoutPositional(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"issues", "--id", "prd-9"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 2 {
+		t.Fatalf("issues exit = %d, want 2; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 0 {
+		t.Errorf("operations = %#v, want no Control Surface call", surface.operations)
+	}
+}
+
+func TestIssuesCommandReadsApprovedPRDAndPRDIssueURL(t *testing.T) {
+	t.Parallel()
+
+	prdPath := filepath.Join(t.TempDir(), "PRD.md")
+	if err := os.WriteFile(prdPath, []byte("# PRD\n\nBuild it."), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{
+		"issues", "--id", "prd-9", "--prd", prdPath, "--prd-issue", "https://github.com/acme/backlog/issues/9",
+	}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 0 {
+		t.Fatalf("issues exit = %d, want 0; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 1 {
+		t.Fatalf("operations = %#v", surface.operations)
+	}
+	operation := surface.operations[0]
+	if operation.ID != "prd-9" || operation.PRD != "# PRD\n\nBuild it." || operation.PRDIssueURL != "https://github.com/acme/backlog/issues/9" {
+		t.Errorf("operation = %#v, want ID, approved PRD contents, and PRD Issue URL", operation)
+	}
+}
+
 func TestRunAcceptsOriginalAgentLoopFlagsAndLimit(t *testing.T) {
 	t.Parallel()
 

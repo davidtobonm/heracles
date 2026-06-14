@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/davidtobonm/heracles/internal/agent"
 	"github.com/davidtobonm/heracles/internal/history"
 	"github.com/davidtobonm/heracles/internal/implementation"
+	"github.com/davidtobonm/heracles/internal/issues"
 	"github.com/davidtobonm/heracles/internal/planning"
 	"github.com/davidtobonm/heracles/internal/tracker"
 	"github.com/davidtobonm/heracles/internal/workspace"
@@ -100,11 +102,11 @@ func (runner *fakeInteractiveRunner) RunInteractive(_ context.Context, _ agent.P
 }
 
 type fakeIssueGenerator struct {
-	calls []struct{ id, prdPath string }
+	calls []struct{ id, prdIssueURL, prdPath string }
 }
 
-func (generator *fakeIssueGenerator) Generate(_ context.Context, id, prdPath string) error {
-	generator.calls = append(generator.calls, struct{ id, prdPath string }{id, prdPath})
+func (generator *fakeIssueGenerator) Generate(_ context.Context, id, prdIssueURL, prdPath string) error {
+	generator.calls = append(generator.calls, struct{ id, prdIssueURL, prdPath string }{id, prdIssueURL, prdPath})
 	return nil
 }
 
@@ -188,6 +190,54 @@ func TestExecuteApprovePlanningSessionLaunchesBackgroundIssueGeneration(t *testi
 	}
 	if len(generator.calls) != 1 || generator.calls[0].id != "session-1" {
 		t.Fatalf("Generate() calls = %#v, want one call for session-1", generator.calls)
+	}
+}
+
+type fakeIssueTrackerRunner struct {
+	output string
+	calls  []string
+}
+
+func (runner *fakeIssueTrackerRunner) Run(_ context.Context, command string, args ...string) ([]byte, error) {
+	runner.calls = append(runner.calls, command+" "+strings.Join(args, " "))
+	return []byte(runner.output), nil
+}
+
+func TestExecuteIssuesRejectsUnapprovedPRDIssue(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeIssueTrackerRunner{output: `{"number":9,"title":"PRD","body":"# PRD","url":"https://github.com/acme/backlog/issues/9","createdAt":"2026-01-01T00:00:00Z","state":"OPEN","labels":[{"name":"heracles:prd"},{"name":"heracles:review"}]}`}
+	local := &Local{root: t.TempDir(), trackerClient: tracker.NewGitHubClient(runner)}
+
+	if _, err := local.Execute(context.Background(), Operation{Name: "issues", PRDIssueURL: "https://github.com/acme/backlog/issues/9"}); err == nil {
+		t.Fatal("Execute(issues) error = nil, want error for an unapproved PRD Issue")
+	}
+}
+
+func TestExecuteIssuesStartsBackgroundGenerationForApprovedPRDIssue(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeIssueTrackerRunner{output: `{"number":9,"title":"PRD","body":"# PRD\n\nBuild it.","url":"https://github.com/acme/backlog/issues/9","createdAt":"2026-01-01T00:00:00Z","state":"OPEN","labels":[{"name":"heracles:prd"},{"name":"heracles:approved"}]}`}
+	generator := &fakeIssueGenerator{}
+	root := t.TempDir()
+	local := &Local{root: root, trackerClient: tracker.NewGitHubClient(runner), issueGenerator: generator}
+
+	result, err := local.Execute(context.Background(), Operation{Name: "issues", PRDIssueURL: "https://github.com/acme/backlog/issues/9"})
+	if err != nil {
+		t.Fatalf("Execute(issues) error = %v", err)
+	}
+	if result.Status != issues.StatusStarted {
+		t.Errorf("result.Status = %q, want %q", result.Status, issues.StatusStarted)
+	}
+	if len(generator.calls) != 1 || generator.calls[0].prdIssueURL != "https://github.com/acme/backlog/issues/9" {
+		t.Fatalf("Generate() calls = %#v, want one background call for the PRD Issue", generator.calls)
+	}
+	contents, err := os.ReadFile(generator.calls[0].prdPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(contents), "Build it.") {
+		t.Errorf("approved PRD mirror = %q, want approved PRD Issue body", contents)
 	}
 }
 
