@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/davidtobonm/heracles/internal/agent"
+	"github.com/davidtobonm/heracles/internal/redact"
 	"github.com/davidtobonm/heracles/internal/testutil/fakeexec"
 )
 
@@ -181,6 +182,38 @@ func TestAllowedEnvironmentIncludesEssentialVariables(t *testing.T) {
 	}
 	if contains(environment, "UNRELATED_SECRET=no") {
 		t.Fatalf("AllowedEnvironment() = %#v, should exclude unrelated secret", environment)
+	}
+}
+
+func TestRunnerRedactsAllowlistedSecretValuesFromOutput(t *testing.T) {
+	fake := fakeexec.New(t, fakeexec.Response{
+		Stdout: "token=super-secret-output-value\n",
+	})
+	binDirectory := t.TempDir()
+	if err := os.Symlink(fake.Path, filepath.Join(binDirectory, "codex")); err != nil {
+		t.Fatalf("link fake codex: %v", err)
+	}
+	path := binDirectory + string(os.PathListSeparator) + os.Getenv("PATH")
+	t.Setenv("PATH", path)
+
+	runner := agent.NewRunner(agent.DefaultRegistry(), []string{
+		"PATH=" + path,
+		"HERACLES_API_KEY=super-secret-output-value",
+	})
+	result, err := runner.Run(context.Background(), "codex", agent.Profile{
+		Model:        "gpt-test",
+		Effort:       "medium",
+		Timeout:      3 * time.Second,
+		EnvAllowlist: []string{"PATH", "HERACLES_API_KEY"},
+	}, []string{t.TempDir()}, "deliver issue")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if strings.Contains(result.Stdout, "super-secret-output-value") {
+		t.Errorf("result.Stdout = %q, secret value leaked", result.Stdout)
+	}
+	if !strings.Contains(result.Stdout, redact.Placeholder) {
+		t.Errorf("result.Stdout = %q, want redaction placeholder", result.Stdout)
 	}
 }
 

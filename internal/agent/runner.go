@@ -10,29 +10,15 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+
+	"github.com/davidtobonm/heracles/internal/environment"
+	"github.com/davidtobonm/heracles/internal/redact"
 )
 
 // Runner executes validated provider invocations.
 type Runner struct {
 	registry    Registry
 	environment []string
-}
-
-var essentialEnvironment = []string{
-	"HOME",
-	"PATH",
-	"LANG",
-	"LC_ALL",
-	"LC_CTYPE",
-	"SHELL",
-	"TERM",
-	"TMPDIR",
-	"USER",
-	"LOGNAME",
-	"XDG_CONFIG_HOME",
-	"XDG_CACHE_HOME",
-	"XDG_DATA_HOME",
-	"SSH_AUTH_SOCK",
 }
 
 // Result is one completed provider invocation.
@@ -82,7 +68,8 @@ func (r Runner) Run(ctx context.Context, provider string, profile Profile, works
 	command.Stderr = &stderr
 
 	runErr := command.Run()
-	result := Result{Invocation: invocation, Stdout: stdout.String(), Stderr: stderr.String()}
+	redactor := redact.New(environment.SecretValues(command.Env))
+	result := Result{Invocation: invocation, Stdout: redactor.String(stdout.String()), Stderr: redactor.String(stderr.String())}
 	if runErr != nil {
 		var exitError *exec.ExitError
 		if errors.As(runErr, &exitError) {
@@ -96,7 +83,7 @@ func (r Runner) Run(ctx context.Context, provider string, profile Profile, works
 			message = strings.TrimSpace(result.Stdout)
 		}
 		if message == "" {
-			message = runErr.Error()
+			message = redactor.String(runErr.Error())
 		}
 		return result, fmt.Errorf("provider %s failed with exit code %d: %s", provider, result.ExitCode, message)
 	}
@@ -111,27 +98,7 @@ func (r Runner) Run(ctx context.Context, provider string, profile Profile, works
 // AllowedEnvironment filters environment variables to an explicit allowlist plus
 // the essential process variables required by authenticated CLI providers.
 func AllowedEnvironment(allowlist, source []string) []string {
-	values := make(map[string]string, len(source))
-	for _, entry := range source {
-		name, _, found := strings.Cut(entry, "=")
-		if found {
-			values[name] = entry
-		}
-	}
-	names := append([]string(nil), essentialEnvironment...)
-	names = append(names, allowlist...)
-	seen := make(map[string]bool, len(names))
-	environment := make([]string, 0, len(names))
-	for _, name := range names {
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		if entry, exists := values[name]; exists {
-			environment = append(environment, entry)
-		}
-	}
-	return environment
+	return environment.Filter(allowlist, source)
 }
 
 // NormalizeOutput extracts the last provider message from text or JSONL output.

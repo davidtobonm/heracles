@@ -2,12 +2,14 @@ package delivery_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/davidtobonm/heracles/internal/delivery"
 	"github.com/davidtobonm/heracles/internal/history"
+	"github.com/davidtobonm/heracles/internal/redact"
 )
 
 func TestEvidencePolicyRequiresOrderedFailingRedAndPassingGreen(t *testing.T) {
@@ -129,11 +131,63 @@ func withExit(evidence delivery.Evidence, exitCode int) delivery.Evidence {
 	return evidence
 }
 
-type fakeRunner struct {
-	calls []string
+func TestVerifierFailsBeforeExecutionWhenRequiredVerifyEnvIsMissing(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	verifier := delivery.Verifier{Runner: runner, Environment: []string{"PATH=/usr/bin"}}
+	_, err := verifier.Run(context.Background(), []delivery.Repository{
+		{Name: "backend", Path: "/work/backend", Verify: []string{"go test ./..."}, VerifyEnv: []string{"DATABASE_URL"}},
+	}, []string{"backend"})
+	if err == nil || !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Fatalf("Run() error = %v, want missing DATABASE_URL", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("calls = %#v, want no command executed when required env is missing", runner.calls)
+	}
 }
 
-func (runner *fakeRunner) Run(_ context.Context, workingDirectory, command string) (delivery.Execution, error) {
+func TestVerifierFiltersEnvironmentAndRedactsSecretValuesFromOutput(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	verifier := delivery.Verifier{Runner: runner, Environment: []string{
+		"PATH=/usr/bin",
+		"DB_PASSWORD=super-secret-db-password",
+		"UNRELATED_TOKEN=should-not-leak",
+	}}
+	results, err := verifier.Run(context.Background(), []delivery.Repository{
+		{Name: "backend", Path: "/work/backend", Verify: []string{"go test ./..."}, VerifyEnv: []string{"DB_PASSWORD"}},
+	}, []string{"backend"})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("calls = %#v, want one command executed", runner.calls)
+	}
+	for _, entry := range runner.envs[0] {
+		if strings.HasPrefix(entry, "UNRELATED_TOKEN=") {
+			t.Errorf("verification env = %#v, should exclude variable outside VerifyEnv", runner.envs[0])
+		}
+	}
+	if !slices.Contains(runner.envs[0], "DB_PASSWORD=super-secret-db-password") {
+		t.Errorf("verification env = %#v, want declared VerifyEnv variable", runner.envs[0])
+	}
+	if strings.Contains(results[0].Stdout, "super-secret-db-password") {
+		t.Errorf("results[0].Stdout = %q, secret value leaked", results[0].Stdout)
+	}
+	if !strings.Contains(results[0].Stdout, redact.Placeholder) {
+		t.Errorf("results[0].Stdout = %q, want redaction placeholder", results[0].Stdout)
+	}
+}
+
+type fakeRunner struct {
+	calls []string
+	envs  [][]string
+}
+
+func (runner *fakeRunner) Run(_ context.Context, workingDirectory, command string, env []string) (delivery.Execution, error) {
 	runner.calls = append(runner.calls, workingDirectory+": "+command)
-	return delivery.Execution{ExitCode: 0, Stdout: "ok", StartedAt: time.Now(), FinishedAt: time.Now()}, nil
+	runner.envs = append(runner.envs, env)
+	return delivery.Execution{ExitCode: 0, Stdout: "db=super-secret-db-password ok", StartedAt: time.Now(), FinishedAt: time.Now()}, nil
 }

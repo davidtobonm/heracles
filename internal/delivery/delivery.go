@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/davidtobonm/heracles/internal/environment"
 	"github.com/davidtobonm/heracles/internal/history"
+	"github.com/davidtobonm/heracles/internal/redact"
 )
 
 // EvidenceKind identifies auditable TDD evidence.
@@ -163,9 +166,10 @@ func validateEvidenceRecord(evidence Evidence) error {
 
 // Repository declares verification commands for one touched Target Repository.
 type Repository struct {
-	Name   string
-	Path   string
-	Verify []string
+	Name      string
+	Path      string
+	Verify    []string
+	VerifyEnv []string
 }
 
 // Execution is one verification command result.
@@ -184,20 +188,32 @@ type Verification struct {
 	Execution
 }
 
-// CommandRunner executes a configured verification command.
+// CommandRunner executes a configured verification command with an explicit
+// process environment.
 type CommandRunner interface {
-	Run(context.Context, string, string) (Execution, error)
+	Run(ctx context.Context, workingDirectory, command string, env []string) (Execution, error)
 }
 
 // Verifier runs configured commands for touched Target Repositories.
 type Verifier struct {
 	Runner CommandRunner
+	// Environment is the launch environment from which repository-specific
+	// allowlists are resolved. A nil Environment uses os.Environ().
+	Environment []string
 }
 
 // Run executes every configured command for every touched Target Repository.
+// Before running any command for a repository, Run validates that every name
+// in the repository's VerifyEnv has a non-empty value in the launch
+// environment, failing without executing any command for that repository if
+// a required variable is missing.
 func (verifier Verifier) Run(ctx context.Context, repositories []Repository, touched []string) ([]Verification, error) {
 	if verifier.Runner == nil {
 		return nil, errors.New("Verifier requires a CommandRunner")
+	}
+	source := verifier.Environment
+	if source == nil {
+		source = os.Environ()
 	}
 	touchedSet := make(map[string]bool, len(touched))
 	for _, name := range touched {
@@ -210,11 +226,19 @@ func (verifier Verifier) Run(ctx context.Context, repositories []Repository, tou
 		if !touchedSet[repository.Name] {
 			continue
 		}
+		if missing := environment.Missing(repository.VerifyEnv, source); len(missing) > 0 {
+			failures = append(failures, fmt.Errorf("%s verification requires environment variables: %s", repository.Name, strings.Join(missing, ", ")))
+			continue
+		}
+		env := environment.Filter(repository.VerifyEnv, source)
+		redactor := redact.New(environment.SecretValues(env))
 		for _, command := range repository.Verify {
-			execution, err := verifier.Runner.Run(ctx, repository.Path, command)
+			execution, err := verifier.Runner.Run(ctx, repository.Path, command, env)
+			execution.Stdout = redactor.String(execution.Stdout)
+			execution.Stderr = redactor.String(execution.Stderr)
 			results = append(results, Verification{Repository: repository.Name, Command: command, Execution: execution})
 			if err != nil {
-				failures = append(failures, fmt.Errorf("%s verification %q: %w", repository.Name, command, err))
+				failures = append(failures, fmt.Errorf("%s verification %q: %s", repository.Name, command, redactor.String(err.Error())))
 			} else if execution.ExitCode != 0 {
 				failures = append(failures, fmt.Errorf("%s verification %q failed with exit code %d", repository.Name, command, execution.ExitCode))
 			}
@@ -232,8 +256,9 @@ func (verifier Verifier) Run(ctx context.Context, repositories []Repository, tou
 // ShellRunner executes user-configured verification commands.
 type ShellRunner struct{}
 
-// Run executes one verification command through the local shell.
-func (ShellRunner) Run(ctx context.Context, workingDirectory, command string) (Execution, error) {
+// Run executes one verification command through the local shell, restricted
+// to the provided process environment.
+func (ShellRunner) Run(ctx context.Context, workingDirectory, command string, env []string) (Execution, error) {
 	startedAt := time.Now().UTC()
 	var process *exec.Cmd
 	if runtime.GOOS == "windows" {
@@ -242,6 +267,7 @@ func (ShellRunner) Run(ctx context.Context, workingDirectory, command string) (E
 		process = exec.CommandContext(ctx, "sh", "-lc", command)
 	}
 	process.Dir = workingDirectory
+	process.Env = env
 	stdout, err := process.Output()
 	finishedAt := time.Now().UTC()
 	execution := Execution{Stdout: string(stdout), StartedAt: startedAt, FinishedAt: finishedAt}

@@ -70,7 +70,7 @@ func NewLocal(ctx context.Context, loaded project.LoadedConfig) (*Local, error) 
 		}
 		repositoryContexts = append(repositoryContexts, planning.RepositoryContext{Name: repository.Name, Path: path})
 		workspaceRepositories = append(workspaceRepositories, workspace.Repository{Name: repository.Name, Path: path, BaseBranch: repository.BaseBranch})
-		verificationRepositories = append(verificationRepositories, delivery.Repository{Name: repository.Name, Path: path, Verify: repository.Verify})
+		verificationRepositories = append(verificationRepositories, delivery.Repository{Name: repository.Name, Path: path, Verify: repository.Verify, VerifyEnv: repository.VerifyEnv})
 		changeRepositories = append(changeRepositories, changeset.Repository{Name: repository.Name, GitHub: repository.GitHub, Base: repository.BaseBranch})
 	}
 	local := &Local{
