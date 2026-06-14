@@ -3,6 +3,7 @@ package install_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/davidtobonm/heracles/internal/install"
@@ -126,7 +127,7 @@ func TestInstallCopiesExecutableBinary(t *testing.T) {
 	}
 
 	targetDir := filepath.Join(t.TempDir(), "nested", "bin")
-	target := install.Target{Dir: targetDir, Path: filepath.Join(targetDir, "heracles")}
+	target := install.Target{Dir: targetDir, Path: filepath.Join(targetDir, install.BinaryName(runtime.GOOS))}
 
 	if err := install.Install(sourcePath, target); err != nil {
 		t.Fatalf("Install() error = %v", err)
