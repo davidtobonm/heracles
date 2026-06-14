@@ -205,12 +205,131 @@ func TestRunAcceptsOriginalAgentLoopFlagsAndLimit(t *testing.T) {
 		"--reviewer-model", "gpt-5.5",
 		"--reviewer-effort", "high",
 		"--limit", "40",
+		"--yes",
 	}, &stdout, &stderr, cli.Options{Control: surface})
 	if exit != 0 {
 		t.Fatalf("run exit = %d; stderr = %q", exit, stderr.String())
 	}
 	if len(surface.operations) != 1 || surface.operations[0].Limit != 40 {
 		t.Errorf("operations = %#v, want run limit 40", surface.operations)
+	}
+}
+
+func TestRunWithPRDURLProcessesOnlyThatBacklogWithoutConfirmation(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"run", "https://github.com/acme/backlog/issues/9"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 0 {
+		t.Fatalf("run exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 1 || surface.operations[0].Name != "run" || surface.operations[0].PRDIssueURL != "https://github.com/acme/backlog/issues/9" {
+		t.Errorf("operations = %#v, want scoped run without confirmation", surface.operations)
+	}
+}
+
+func TestBareRunRequiresConfirmation(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"run"}, &stdout, &stderr, cli.Options{Control: surface, Input: strings.NewReader("y\n")})
+	if exit != 0 {
+		t.Fatalf("run exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 2 || surface.operations[0].Kind != "ready" || surface.operations[1].Name != "run" {
+		t.Errorf("operations = %#v, want confirmation lookup before run", surface.operations)
+	}
+	if !strings.Contains(stdout.String(), "Process all") {
+		t.Errorf("stdout = %q, want confirmation prompt", stdout.String())
+	}
+}
+
+func TestBareRunDeclinedConfirmationDoesNotRun(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"run"}, &stdout, &stderr, cli.Options{Control: surface, Input: strings.NewReader("n\n")})
+	if exit != 0 {
+		t.Fatalf("run exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 1 || surface.operations[0].Kind != "ready" {
+		t.Errorf("operations = %#v, want only the confirmation lookup", surface.operations)
+	}
+	if !strings.Contains(stdout.String(), "cancelled") {
+		t.Errorf("stdout = %q, want cancellation message", stdout.String())
+	}
+}
+
+func TestRunYesFlagSkipsConfirmation(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"run", "--yes"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 0 {
+		t.Fatalf("run exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 1 || surface.operations[0].Name != "run" {
+		t.Errorf("operations = %#v, want unprompted run", surface.operations)
+	}
+}
+
+func TestLaborAcceptsPositionalProblemEquivalentToFlag(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"labor", "Build a thing"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 0 {
+		t.Fatalf("labor exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 1 || surface.operations[0].Problem != "Build a thing" || surface.operations[0].ID == "" {
+		t.Errorf("operations = %#v, want positional problem and generated ID", surface.operations)
+	}
+}
+
+func TestLaborConflictingPositionalAndFlagProblemsFail(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"labor", "Build a thing", "--problem", "Build another thing"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 2 {
+		t.Fatalf("labor exit = %d, want 2; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 0 {
+		t.Errorf("operations = %#v, want no Control Surface call", surface.operations)
+	}
+}
+
+func TestLaborRequiresProblemOrID(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"labor"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 2 {
+		t.Fatalf("labor exit = %d, want 2; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 0 {
+		t.Errorf("operations = %#v, want no Control Surface call", surface.operations)
+	}
+}
+
+func TestLaborResumesByIDWithoutProblem(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"labor", "--id", "labor-1"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 0 {
+		t.Fatalf("labor exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 1 || surface.operations[0].ID != "labor-1" || surface.operations[0].Problem != "" {
+		t.Errorf("operations = %#v, want resume by ID without problem", surface.operations)
 	}
 }
 
@@ -440,6 +559,7 @@ func TestRunAcceptsAllRoleLaunchOverridesAndDottedSyntax(t *testing.T) {
 		"--implementer", "codex",
 		"--reviewer", "codex",
 		"--limit", "5",
+		"--yes",
 	}, &stdout, &stderr, cli.Options{Control: surface})
 	if exit != 0 {
 		t.Fatalf("run exit = %d; stderr = %q", exit, stderr.String())

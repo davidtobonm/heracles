@@ -182,6 +182,7 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 	roleFlags := roleProfileFlags(flags)
 	limit := flags.Int("limit", 0, "attempt at most this many issues during this run")
 	retryUntilPass := flags.Bool("retry-until-pass", false, "retry correction cycles without limit for trusted, unattended launches")
+	yes := flags.Bool("yes", false, "skip confirmation prompts")
 	if err := flags.Parse(interspersedFlags(remaining)); errors.Is(err, flag.ErrHelp) {
 		return 0
 	} else if err != nil {
@@ -227,6 +228,26 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 		if len(positionals) == 1 {
 			operation.PRDIssueURL = positionals[0]
 		}
+	case "run":
+		if len(positionals) > 1 {
+			fmt.Fprintln(stderr, "heracles run accepts at most one PRD Issue URL")
+			return 2
+		}
+		if len(positionals) == 1 {
+			operation.PRDIssueURL = positionals[0]
+		}
+	case "labor":
+		if len(positionals) > 1 {
+			fmt.Fprintln(stderr, "heracles labor accepts at most one problem description")
+			return 2
+		}
+		if len(positionals) == 1 {
+			if operation.Problem != "" && operation.Problem != positionals[0] {
+				fmt.Fprintln(stderr, "heracles labor received conflicting problem descriptions")
+				return 2
+			}
+			operation.Problem = positionals[0]
+		}
 	default:
 		if len(positionals) != 0 {
 			fmt.Fprintf(stderr, "heracles %s does not accept positional arguments\n", command)
@@ -261,9 +282,14 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 			return 2
 		}
 	}
-	if command == "labor" && (operation.ID == "" || operation.Problem == "") {
-		fmt.Fprintln(stderr, "heracles labor requires --id and --problem")
-		return 2
+	if command == "labor" {
+		if operation.ID == "" && operation.Problem == "" {
+			fmt.Fprintln(stderr, "heracles labor requires a problem description or --id to resume")
+			return 2
+		}
+		if operation.ID == "" {
+			operation.ID = laborID(operation.Problem, options.Now)
+		}
 	}
 	if command == "plan" && operation.ID == "" {
 		fmt.Fprintln(stderr, "heracles plan requires --id")
@@ -293,6 +319,26 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 	}
 	if owned {
 		defer surface.Close()
+	}
+	if command == "run" && operation.PRDIssueURL == "" && !*yes {
+		ready, err := surface.Execute(context.Background(), control.Operation{Name: "list", Kind: "ready"})
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		count := 0
+		if values, ok := ready.Data.([]any); ok {
+			count = len(values)
+		}
+		confirmed, err := confirm(options, stdout, fmt.Sprintf("Process all %d eligible issue(s) across the project?", count))
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if !confirmed {
+			fmt.Fprintln(stdout, "run: cancelled")
+			return 0
+		}
 	}
 	result, err := surface.Execute(context.Background(), operation)
 	if err != nil {
@@ -593,6 +639,43 @@ func runConfigAppend(stdout, stderr io.Writer, path string, preferences project.
 	}
 	fmt.Fprintf(stdout, "Updated preferences: %s\n", path)
 	return 0
+}
+
+// laborID generates a deterministic-shaped, unique Labor ID from a problem
+// description so that `heracles labor "Problem"` works without an explicit --id.
+func laborID(problem string, now func() time.Time) string {
+	if now == nil {
+		now = time.Now
+	}
+	timestamp := now().UTC().Format("20060102150405")
+	if slug := slugify(problem); slug != "" {
+		return "labor-" + slug + "-" + timestamp
+	}
+	return "labor-" + timestamp
+}
+
+// slugify lowercases value and replaces runs of non-alphanumeric characters
+// with a single hyphen, trimming to a reasonable length.
+func slugify(value string) string {
+	var builder strings.Builder
+	lastHyphen := true
+	for _, r := range strings.ToLower(value) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+			lastHyphen = false
+			continue
+		}
+		if !lastHyphen {
+			builder.WriteByte('-')
+			lastHyphen = true
+		}
+	}
+	slug := strings.Trim(builder.String(), "-")
+	const maxLength = 40
+	if len(slug) > maxLength {
+		slug = strings.Trim(slug[:maxLength], "-")
+	}
+	return slug
 }
 
 // confirm prompts the user with a yes/no question and reports the answer.

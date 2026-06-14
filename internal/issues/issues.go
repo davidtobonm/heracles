@@ -156,7 +156,7 @@ func (service Service) Generate(ctx context.Context, request GenerateRequest) (S
 	var existing []reconcile.Existing
 	existingByID := make(map[string]tracker.Issue)
 	for _, issue := range existingIssues {
-		parentURL, ok := ParentPRDURL(issue.Body)
+		parentURL, ok := tracker.ParentPRDURL(issue.Body)
 		if !ok || parentURL != request.ParentPRDURL {
 			continue
 		}
@@ -359,23 +359,6 @@ func Body(proposal Proposal, parentPRDURL, revision string, dependencyURLs map[s
 <!-- heracles:prd-revision=%s -->
 `, proposal.Type, numbers(proposal.UserStories), proposal.WhatToBuild, bullets(proposal.AcceptanceCriteria),
 		bullets(proposal.TargetRepositories), bullets(proposal.ConflictKeys), bullets(blockedBy), parentPRDURL, proposal.ID, revision)
-}
-
-// ParentPRDURL returns the Parent PRD URL embedded in an implementation
-// issue's body, if present.
-func ParentPRDURL(body string) (string, bool) {
-	inSection := false
-	for _, rawLine := range strings.Split(body, "\n") {
-		line := strings.TrimSpace(rawLine)
-		if strings.HasPrefix(line, "## ") {
-			inSection = strings.EqualFold(line, "## Parent PRD")
-			continue
-		}
-		if inSection && line != "" {
-			return line, true
-		}
-	}
-	return "", false
 }
 
 // SemanticID returns the Issue Author-assigned semantic ID embedded in an

@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/davidtobonm/heracles/internal/control"
+	"github.com/davidtobonm/heracles/internal/labor"
 	"github.com/davidtobonm/heracles/internal/project"
 )
 
@@ -59,5 +61,12 @@ planning:
 	}
 	if result.Status != "ok" {
 		t.Errorf("result = %#v", result)
+	}
+
+	if err := labor.NewFileStore(root).Save(context.Background(), labor.State{ID: "labor-1", Problem: "Original problem", Status: labor.StatusCompleted}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if _, err := surface.Execute(context.Background(), control.Operation{Name: "labor", ID: "labor-1", Problem: "Different problem"}); err == nil || !strings.Contains(err.Error(), "already exists with a different problem") {
+		t.Errorf("Execute(labor with conflicting problem) error = %v, want conflict", err)
 	}
 }

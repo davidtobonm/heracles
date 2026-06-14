@@ -176,6 +176,7 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 	case "run":
 		backlog := local.backlog("implementation-direct", "", operation.RetryUntilPass)
 		backlog.Limit = operation.Limit
+		backlog.PRDURL = operation.PRDIssueURL
 		value, err := backlog.Run(ctx)
 		status := "completed"
 		if err != nil {
@@ -183,6 +184,13 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 		}
 		return result(operation, status, value), err
 	case "labor":
+		if existing, err := labor.NewFileStore(local.root).Load(ctx, operation.ID); err == nil {
+			if operation.Problem != "" && existing.Problem != "" && existing.Problem != operation.Problem {
+				return Result{}, fmt.Errorf("Labor %q already exists with a different problem", operation.ID)
+			}
+		} else if !errors.Is(err, labor.ErrNotFound) {
+			return Result{}, err
+		}
 		state, err := local.labor(operation.ID).Run(ctx, labor.Request{
 			ID: operation.ID, Problem: operation.Problem, TrackerRepository: local.trackerRepository(), Repositories: local.repositoryContexts(),
 		})
@@ -414,6 +422,17 @@ func (executor *attemptExecutor) Execute(ctx context.Context, candidate schedule
 }
 
 func (local *Local) list(ctx context.Context, kind string) (any, error) {
+	if kind == "ready" {
+		issues, err := local.tracker.ReadyIssues(ctx)
+		if err != nil {
+			return nil, err
+		}
+		values := make([]any, len(issues))
+		for index, issue := range issues {
+			values[index] = issue
+		}
+		return values, nil
+	}
 	labors, err := local.history.Labors(ctx)
 	if err != nil {
 		return nil, err
