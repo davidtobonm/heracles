@@ -52,16 +52,33 @@ func LoadPreferences(path string) (Preferences, error) {
 	return preferences, nil
 }
 
-// WritePreferences persists preferences.
+// WritePreferences persists preferences atomically.
 func WritePreferences(path string, preferences Preferences) error {
 	contents, err := yaml.Marshal(preferences)
 	if err != nil {
 		return fmt.Errorf("encode preferences: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create preferences directory: %w", err)
 	}
-	if err := os.WriteFile(path, contents, 0o644); err != nil {
+	temp, err := os.CreateTemp(directory, ".preferences-*.yaml")
+	if err != nil {
+		return fmt.Errorf("create temporary preferences file: %w", err)
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if _, err := temp.Write(contents); err != nil {
+		temp.Close()
+		return fmt.Errorf("write preferences: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("write preferences: %w", err)
+	}
+	if err := os.Chmod(tempPath, 0o644); err != nil {
+		return fmt.Errorf("set preferences permissions: %w", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
 		return fmt.Errorf("write preferences: %w", err)
 	}
 	return nil
@@ -180,5 +197,17 @@ func mergeProfile(target *ProfileConfig, source ProfileConfig) {
 	}
 	if source.Variant != "" {
 		target.Variant = source.Variant
+	}
+	if source.Timeout != "" {
+		target.Timeout = source.Timeout
+	}
+	if len(source.ExtraArgs) > 0 {
+		target.ExtraArgs = source.ExtraArgs
+	}
+	if len(source.EnvAllowlist) > 0 {
+		target.EnvAllowlist = source.EnvAllowlist
+	}
+	if source.Concurrency != 0 {
+		target.Concurrency = source.Concurrency
 	}
 }
