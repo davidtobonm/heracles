@@ -2,10 +2,13 @@ package changeset
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/davidtobonm/heracles/internal/ci"
 )
 
 // CommandRunner executes GitHub CLI operations.
@@ -65,6 +68,65 @@ func (client *GitHubClient) WaitForCI(ctx context.Context, pullRequest PullReque
 		"--watch",
 	)
 	return err
+}
+
+// Status reports a pull request's merge, review, and required-check state.
+func (client *GitHubClient) Status(ctx context.Context, pullRequest PullRequest) (PullRequestStatus, error) {
+	output, err := client.runner.Run(ctx, "gh", "pr", "view", strconv.Itoa(pullRequest.Number),
+		"--repo", repositoryFromPullRequestURL(pullRequest.URL),
+		"--json", "mergedAt,reviewDecision,statusCheckRollup",
+	)
+	if err != nil {
+		return PullRequestStatus{}, err
+	}
+	var decoded struct {
+		MergedAt          *string `json:"mergedAt"`
+		ReviewDecision    string  `json:"reviewDecision"`
+		StatusCheckRollup []struct {
+			Name       string `json:"name"`
+			Context    string `json:"context"`
+			Status     string `json:"status"`
+			Conclusion string `json:"conclusion"`
+			State      string `json:"state"`
+		} `json:"statusCheckRollup"`
+	}
+	if err := json.Unmarshal(output, &decoded); err != nil {
+		return PullRequestStatus{}, fmt.Errorf("decode pull request status: %w", err)
+	}
+	status := PullRequestStatus{
+		Merged:           decoded.MergedAt != nil && *decoded.MergedAt != "",
+		ChangesRequested: decoded.ReviewDecision == "CHANGES_REQUESTED",
+	}
+	for _, check := range decoded.StatusCheckRollup {
+		name := check.Name
+		if name == "" {
+			name = check.Context
+		}
+		conclusion := strings.ToLower(check.Conclusion)
+		if conclusion == "" {
+			conclusion = strings.ToLower(statusContextConclusion(check.State))
+		}
+		if conclusion == "success" || conclusion == "neutral" || conclusion == "skipped" {
+			continue
+		}
+		status.FailedChecks = append(status.FailedChecks, ci.Check{
+			Name: name, Status: strings.ToLower(check.Status), Conclusion: conclusion,
+		})
+	}
+	return status, nil
+}
+
+// statusContextConclusion maps a legacy commit status context's state to a
+// check-run-style conclusion.
+func statusContextConclusion(state string) string {
+	switch strings.ToUpper(state) {
+	case "SUCCESS":
+		return "success"
+	case "ERROR", "FAILURE":
+		return "failure"
+	default:
+		return ""
+	}
 }
 
 // Merge merges a pull request after required checks pass.

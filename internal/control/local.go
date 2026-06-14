@@ -12,6 +12,7 @@ import (
 
 	"github.com/davidtobonm/heracles/internal/agent"
 	"github.com/davidtobonm/heracles/internal/changeset"
+	"github.com/davidtobonm/heracles/internal/correction"
 	"github.com/davidtobonm/heracles/internal/delivery"
 	"github.com/davidtobonm/heracles/internal/doctor"
 	"github.com/davidtobonm/heracles/internal/history"
@@ -22,6 +23,7 @@ import (
 	"github.com/davidtobonm/heracles/internal/planning"
 	"github.com/davidtobonm/heracles/internal/prd"
 	"github.com/davidtobonm/heracles/internal/project"
+	"github.com/davidtobonm/heracles/internal/review"
 	"github.com/davidtobonm/heracles/internal/scheduler"
 	"github.com/davidtobonm/heracles/internal/tracker"
 	"github.com/davidtobonm/heracles/internal/workspace"
@@ -45,6 +47,8 @@ type Local struct {
 	reviewer           implementation.Reviewer
 	verifier           implementation.Verifier
 	deliverer          implementation.Deliverer
+	reviewReconciler   implementation.ReviewReconciler
+	correctionPolicy   correction.Policy
 	changeRepositories []changeset.Repository
 	scheduler          scheduler.Scheduler
 	profile            string
@@ -123,6 +127,8 @@ func NewLocal(ctx context.Context, loaded project.LoadedConfig) (*Local, error) 
 			Client: changeset.NewGitHubClient(commandRunner),
 			Policy: changeset.Policy{AutoMerge: loaded.Config.Delivery.AutoMerge, MergeOrder: loaded.Config.Delivery.MergeOrder},
 		},
+		reviewReconciler:   review.Service{Client: changeset.NewGitHubClient(commandRunner)},
+		correctionPolicy:   correction.Policy{MaxCycles: loaded.Config.Delivery.CorrectionRetries},
 		changeRepositories: changeRepositories,
 		scheduler: scheduler.Scheduler{
 			Concurrency:   loaded.Config.Labor.IssueConcurrency,
@@ -168,7 +174,7 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 		})
 		return result(operation, state.Status, state), err
 	case "run":
-		backlog := local.backlog("implementation-direct", "")
+		backlog := local.backlog("implementation-direct", "", operation.RetryUntilPass)
 		backlog.Limit = operation.Limit
 		value, err := backlog.Run(ctx)
 		status := "completed"
@@ -248,14 +254,14 @@ func (local *Local) labor(id string) labor.Service {
 		prd = state.Planning.PRD
 	}
 	return labor.Service{
-		Store: labor.NewHistoryStore(local.root, local.history), Planning: local.planning, Issues: local.issues, Implementation: local.backlog(id, prd),
+		Store: labor.NewHistoryStore(local.root, local.history), Planning: local.planning, Issues: local.issues, Implementation: local.backlog(id, prd, false),
 	}
 }
 
-func (local *Local) backlog(laborID, prd string) implementation.BacklogRunner {
+func (local *Local) backlog(laborID, prd string, retryUntilPass bool) implementation.BacklogRunner {
 	return implementation.BacklogRunner{
 		Source:    resumableBacklogSource{Source: local.tracker, History: local.history, LaborID: laborID},
-		Scheduler: local.scheduler, Executor: &attemptExecutor{local: local, laborID: laborID, prd: prd}, Profile: local.profile,
+		Scheduler: local.scheduler, Executor: &attemptExecutor{local: local, laborID: laborID, prd: prd, retryUntilPass: retryUntilPass}, Profile: local.profile,
 	}
 }
 
@@ -263,6 +269,7 @@ func (local *Local) implementation() implementation.Service {
 	return implementation.Service{
 		Store: implementation.NewHistoryStore(local.root, local.history), Tracker: local.tracker, Workspaces: local.workspaces,
 		Implementer: local.implementer, Reviewer: local.reviewer, Verifier: local.verifier, Deliverer: local.deliverer,
+		ReviewReconciler: local.reviewReconciler, CorrectionPolicy: local.correctionPolicy,
 	}
 }
 
@@ -286,9 +293,10 @@ func (local *Local) implementationForAttempt(ctx context.Context, attemptID stri
 }
 
 type attemptExecutor struct {
-	local   *Local
-	laborID string
-	prd     string
+	local          *Local
+	laborID        string
+	prd            string
+	retryUntilPass bool
 }
 
 type resumableBacklogSource struct {
@@ -400,6 +408,7 @@ func (executor *attemptExecutor) Execute(ctx context.Context, candidate schedule
 	_, err = executor.local.implementation().Run(ctx, implementation.Request{
 		AttemptID: attemptID, LaborID: executor.laborID, Issue: issue, PRD: executor.prd,
 		ChangeSetRepositories: append([]changeset.Repository(nil), executor.local.changeRepositories...),
+		RetryUntilPass:        executor.retryUntilPass,
 	})
 	return err
 }

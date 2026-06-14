@@ -81,6 +81,9 @@ type LaborConfig struct {
 type DeliveryConfig struct {
 	AutoMerge  bool     `yaml:"auto_merge"`
 	MergeOrder []string `yaml:"merge_order,omitempty"`
+	// CorrectionRetries bounds correction cycles attempted before an issue
+	// blocks, per PRD.md. Zero uses correction.DefaultMaxCycles.
+	CorrectionRetries int `yaml:"correction_retries,omitempty"`
 }
 
 // PlanningConfig declares bounded clarification policy.

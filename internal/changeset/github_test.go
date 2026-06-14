@@ -55,6 +55,34 @@ func TestGitHubClientUsesDeterministicPullRequestContract(t *testing.T) {
 	}
 }
 
+func TestGitHubClientDecodesPullRequestStatus(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: []commandOutput{
+		{output: `{"mergedAt":null,"reviewDecision":"CHANGES_REQUESTED","statusCheckRollup":[{"name":"build","status":"completed","conclusion":"failure"},{"name":"lint","status":"completed","conclusion":"success"}]}`},
+	}}
+	client := changeset.NewGitHubClient(runner)
+	pullRequest := changeset.PullRequest{Repository: "backend", URL: "https://github.com/acme/backend/pull/42", Number: 42}
+
+	status, err := client.Status(context.Background(), pullRequest)
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if status.Merged {
+		t.Errorf("status.Merged = true, want false for an unmerged pull request")
+	}
+	if !status.ChangesRequested {
+		t.Errorf("status.ChangesRequested = false, want true")
+	}
+	if len(status.FailedChecks) != 1 || status.FailedChecks[0].Name != "build" || status.FailedChecks[0].Conclusion != "failure" {
+		t.Errorf("status.FailedChecks = %#v, want only the failing build check", status.FailedChecks)
+	}
+
+	if !strings.Contains(strings.Join(runner.calls, "\n"), "gh pr view 42 --repo acme/backend --json mergedAt,reviewDecision,statusCheckRollup") {
+		t.Errorf("commands = %#v, want gh pr view with status JSON fields", runner.calls)
+	}
+}
+
 func TestGitHubClientReturnsActionableInvalidCreateOutput(t *testing.T) {
 	t.Parallel()
 

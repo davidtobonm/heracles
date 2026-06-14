@@ -114,7 +114,7 @@ func Initialize(ctx context.Context, options InitOptions) (InitResult, error) {
 		},
 		Labor: LaborConfig{IssueConcurrency: 1},
 		Delivery: DeliveryConfig{
-			AutoMerge: false,
+			AutoMerge: true,
 		},
 		Planning: PlanningConfig{QuestionBudget: 20},
 	}

@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/davidtobonm/heracles/internal/changeset"
+	"github.com/davidtobonm/heracles/internal/correction"
 	"github.com/davidtobonm/heracles/internal/delivery"
+	"github.com/davidtobonm/heracles/internal/review"
 	"github.com/davidtobonm/heracles/internal/tracker"
 	"github.com/davidtobonm/heracles/internal/workspace"
 )
@@ -24,6 +26,7 @@ const (
 	StatusVerified       = "verified"
 	StatusDelivered      = "delivered"
 	StatusCompleted      = "completed"
+	StatusAwaitingReview = "awaiting_review"
 	StatusFailed         = "failed"
 	StatusBlocked        = "blocked"
 )
@@ -59,7 +62,16 @@ type State struct {
 	Verification          []delivery.Verification `json:"verification,omitempty"`
 	ChangeSetRepositories []changeset.Repository  `json:"change_set_repositories,omitempty"`
 	ChangeSet             changeset.ChangeSet     `json:"change_set"`
-	Events                []Event                 `json:"events,omitempty"`
+	// CorrectionCycles counts correction attempts consumed for this issue,
+	// per PRD.md's correction-cycle policy.
+	CorrectionCycles int `json:"correction_cycles,omitempty"`
+	// Correction carries the prior delivery failure's context into the next
+	// Implementer and Reviewer pass during a correction cycle.
+	Correction *changeset.Correction `json:"correction,omitempty"`
+	// RetryUntilPass permits unbounded correction cycles for trusted,
+	// unattended launches.
+	RetryUntilPass bool    `json:"retry_until_pass,omitempty"`
+	Events         []Event `json:"events,omitempty"`
 }
 
 // Request starts or resumes one issue attempt.
@@ -69,6 +81,9 @@ type Request struct {
 	Issue                 tracker.Issue
 	PRD                   string
 	ChangeSetRepositories []changeset.Repository
+	// RetryUntilPass permits unbounded correction cycles for trusted,
+	// unattended launches.
+	RetryUntilPass bool
 }
 
 // ImplementContext is the complete isolated context presented to the Implementer.
@@ -76,6 +91,9 @@ type ImplementContext struct {
 	Issue     tracker.Issue
 	PRD       string
 	Workspace workspace.Workspace
+	// Correction describes the prior delivery failure that triggered this
+	// correction cycle. It is empty outside of a correction cycle.
+	Correction string
 }
 
 // Store persists complete attempt state.
@@ -90,6 +108,12 @@ type Tracker interface {
 	Block(context.Context, tracker.Reference, string) error
 	Complete(context.Context, tracker.Reference, string) error
 	Retry(context.Context, tracker.Reference, string) error
+	Review(context.Context, tracker.Reference, string) error
+}
+
+// ReviewReconciler reports whether a Change Set awaiting manual review has merged.
+type ReviewReconciler interface {
+	Reconcile(context.Context, changeset.ChangeSet) (review.Outcome, error)
 }
 
 // Workspaces coordinates isolated issue worktrees.
@@ -121,13 +145,20 @@ type Deliverer interface {
 
 // Service runs and resumes one independently executable Implementation Stage attempt.
 type Service struct {
-	Store       Store
-	Tracker     Tracker
-	Workspaces  Workspaces
-	Implementer Implementer
-	Reviewer    Reviewer
-	Verifier    Verifier
-	Deliverer   Deliverer
+	Store            Store
+	Tracker          Tracker
+	Workspaces       Workspaces
+	Implementer      Implementer
+	Reviewer         Reviewer
+	Verifier         Verifier
+	Deliverer        Deliverer
+	ReviewReconciler ReviewReconciler
+	// CorrectionPolicy bounds correction cycles for blocked Change Set
+	// deliveries. A zero MaxCycles uses correction.DefaultMaxCycles.
+	CorrectionPolicy correction.Policy
+	// Sleep waits between infrastructure-failure correction cycles. It
+	// defaults to time.Sleep.
+	Sleep func(time.Duration)
 }
 
 // Run starts or resumes an attempt until completion or a durable failure.
@@ -143,6 +174,7 @@ func (service Service) Run(ctx context.Context, request Request) (State, error) 
 		state = State{
 			AttemptID: request.AttemptID, LaborID: request.LaborID, Issue: request.Issue, PRD: request.PRD,
 			Status: StatusNew, ChangeSetRepositories: append([]changeset.Repository(nil), request.ChangeSetRepositories...),
+			RetryUntilPass: request.RetryUntilPass,
 		}
 		if err := service.record(ctx, &state, StatusNew, "Attempt created"); err != nil {
 			return state, err
@@ -175,7 +207,9 @@ func (service Service) Run(ctx context.Context, request Request) (State, error) 
 				return state, err
 			}
 		case StatusWorkspaceReady:
-			result, err := service.Implementer.Implement(ctx, ImplementContext{Issue: state.Issue, PRD: state.PRD, Workspace: state.Workspace})
+			result, err := service.Implementer.Implement(ctx, ImplementContext{
+				Issue: state.Issue, PRD: state.PRD, Workspace: state.Workspace, Correction: correctionContext(state.Correction),
+			})
 			if err != nil {
 				return service.fail(ctx, state, StatusFailed, workspace.OutcomeFailed, fmt.Errorf("Implementer: %w", err))
 			}
@@ -190,6 +224,7 @@ func (service Service) Run(ctx context.Context, request Request) (State, error) 
 			outcome, err := service.Reviewer.Review(ctx, state.Workspace, delivery.ReviewContext{
 				Issue: state.Issue.Body, PRD: state.PRD, Changes: state.Implementation.Changes,
 				Evidence: state.Implementation.Evidence, TDDExemption: state.Implementation.EvidencePolicy.Reason,
+				Correction: correctionContext(state.Correction),
 			})
 			if err != nil {
 				return service.fail(ctx, state, StatusFailed, workspace.OutcomeFailed, fmt.Errorf("Reviewer: %w", err))
@@ -198,6 +233,7 @@ func (service Service) Run(ctx context.Context, request Request) (State, error) 
 				return service.fail(ctx, state, StatusBlocked, workspace.OutcomeBlocked, fmt.Errorf("review gate: %w", err))
 			}
 			state.Review = outcome
+			state.Correction = nil
 			if outcome.Status == StatusBlocked {
 				return service.fail(ctx, state, StatusBlocked, workspace.OutcomeBlocked, errors.New(outcome.Summary))
 			}
@@ -221,13 +257,54 @@ func (service Service) Run(ctx context.Context, request Request) (State, error) 
 		case StatusVerified:
 			changeSet, err := service.Deliverer.Deliver(ctx, service.changeSetRequest(state))
 			state.ChangeSet = changeSet
-			if err != nil || changeSet.Status == changeset.StatusBlocked {
+			switch {
+			case err == nil && changeSet.Status == changeset.StatusMerged:
+				if err := service.record(ctx, &state, StatusDelivered, "Change Set delivered"); err != nil {
+					return state, err
+				}
+			case err == nil && changeSet.Status == changeset.StatusReview:
+				if err := service.Tracker.Review(ctx, state.Issue.Reference, "Change Set awaiting manual pull request review"); err != nil {
+					return state, fmt.Errorf("publish review state: %w", err)
+				}
+				if err := service.record(ctx, &state, StatusAwaitingReview, "Change Set awaiting manual pull request review"); err != nil {
+					return state, err
+				}
+			case changeSet.Status == changeset.StatusBlocked && changeSet.Correction != nil:
+				decision, wait := correction.Decide(state.CorrectionCycles, changeSet.Correction.Classification, service.correctionPolicy(state))
+				if decision != correction.Retry {
+					if err == nil {
+						err = errors.New("Change Set delivery blocked")
+					}
+					return service.fail(ctx, state, StatusBlocked, workspace.OutcomeBlocked, fmt.Errorf("correction cycles exhausted: %w", err))
+				}
+				if wait > 0 {
+					service.sleep(wait)
+				}
+				state.CorrectionCycles++
+				state.Correction = changeSet.Correction
+				if err := service.record(ctx, &state, StatusWorkspaceReady, "Correction cycle: "+changeSet.Correction.Reason); err != nil {
+					return state, err
+				}
+			default:
 				if err == nil {
 					err = errors.New("Change Set delivery blocked")
 				}
 				return service.fail(ctx, state, StatusBlocked, workspace.OutcomeBlocked, fmt.Errorf("deliver Change Set: %w", err))
 			}
-			if err := service.record(ctx, &state, StatusDelivered, "Change Set delivered"); err != nil {
+		case StatusAwaitingReview:
+			outcome, err := service.ReviewReconciler.Reconcile(ctx, state.ChangeSet)
+			if err != nil {
+				return state, fmt.Errorf("reconcile Change Set review: %w", err)
+			}
+			state.ChangeSet.PullRequests = outcome.PullRequests
+			if !outcome.Merged {
+				if err := service.Store.Save(ctx, state); err != nil {
+					return state, err
+				}
+				return state, nil
+			}
+			state.ChangeSet.Status = changeset.StatusMerged
+			if err := service.record(ctx, &state, StatusDelivered, "Change Set merged after review"); err != nil {
 				return state, err
 			}
 		case StatusDelivered:
@@ -271,10 +348,44 @@ func (service Service) Retry(ctx context.Context, attemptID string) (State, erro
 }
 
 func (service Service) validate() error {
-	if service.Store == nil || service.Tracker == nil || service.Workspaces == nil || service.Implementer == nil || service.Reviewer == nil || service.Verifier == nil || service.Deliverer == nil {
-		return errors.New("Implementation Stage requires Store, Tracker, Workspaces, Implementer, Reviewer, Verifier, and Deliverer")
+	if service.Store == nil || service.Tracker == nil || service.Workspaces == nil || service.Implementer == nil || service.Reviewer == nil || service.Verifier == nil || service.Deliverer == nil || service.ReviewReconciler == nil {
+		return errors.New("Implementation Stage requires Store, Tracker, Workspaces, Implementer, Reviewer, Verifier, Deliverer, and ReviewReconciler")
 	}
 	return nil
+}
+
+func (service Service) correctionPolicy(state State) correction.Policy {
+	policy := service.CorrectionPolicy
+	policy.RetryUntilPass = state.RetryUntilPass
+	return policy
+}
+
+func (service Service) sleep(duration time.Duration) {
+	if service.Sleep != nil {
+		service.Sleep(duration)
+		return
+	}
+	time.Sleep(duration)
+}
+
+// correctionContext describes a prior delivery failure for the Implementer
+// and Reviewer to resolve during a correction cycle.
+func correctionContext(value *changeset.Correction) string {
+	if value == nil {
+		return ""
+	}
+	switch {
+	case value.RequestedChanges:
+		return fmt.Sprintf("The %s pull request had requested changes: %s", value.Repository, value.Reason)
+	case len(value.FailedChecks) > 0:
+		var checks []string
+		for _, check := range value.FailedChecks {
+			checks = append(checks, fmt.Sprintf("%s (%s)", check.Name, check.Conclusion))
+		}
+		return fmt.Sprintf("Required CI checks failed on the %s pull request: %s", value.Repository, strings.Join(checks, ", "))
+	default:
+		return fmt.Sprintf("Delivery for %s failed: %s", value.Repository, value.Reason)
+	}
 }
 
 func (service Service) record(ctx context.Context, state *State, status, message string) error {
