@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"runtime"
 	"slices"
 	"strings"
 )
@@ -22,11 +23,13 @@ type Adapter interface {
 	Invocation(Profile, []string, string) (Invocation, error)
 }
 
-// Capabilities declares the profile settings supported by one provider.
+// Capabilities declares the profile settings supported by one provider. An
+// empty Platforms means the provider is supported on every platform.
 type Capabilities struct {
-	Model   bool
-	Efforts []string
-	Variant bool
+	Model     bool
+	Efforts   []string
+	Variant   bool
+	Platforms []string
 }
 
 // Registry contains the supported provider adapters.
@@ -42,6 +45,8 @@ func DefaultRegistry() Registry {
 		providerAdapter{name: "claude", executable: "claude", model: true, efforts: []string{"low", "medium", "high", "max"}, build: claudeInvocation},
 		providerAdapter{name: "opencode", executable: "opencode", model: true, variant: true, promptArg: true, build: opencodeInvocation},
 		providerAdapter{name: "kimi", executable: "kimi", model: true, build: kimiInvocation},
+		providerAdapter{name: "openclaw", executable: "openclaw", model: true, efforts: []string{"low", "medium", "high"}, build: openclawInvocation},
+		providerAdapter{name: "hermes", executable: "hermes", model: true, variant: true, promptArg: true, build: hermesInvocation},
 	}
 	registry := Registry{adapters: make(map[string]Adapter, len(adapters)), order: make([]string, len(adapters))}
 	for index, adapter := range adapters {
@@ -71,6 +76,7 @@ type providerAdapter struct {
 	model      bool
 	efforts    []string
 	variant    bool
+	platforms  []string
 	promptArg  bool
 	build      func(Profile, []string, string) Invocation
 }
@@ -85,13 +91,17 @@ func (a providerAdapter) Executable() string {
 
 func (a providerAdapter) Capabilities() Capabilities {
 	return Capabilities{
-		Model:   a.model,
-		Efforts: append([]string(nil), a.efforts...),
-		Variant: a.variant,
+		Model:     a.model,
+		Efforts:   append([]string(nil), a.efforts...),
+		Variant:   a.variant,
+		Platforms: append([]string(nil), a.platforms...),
 	}
 }
 
 func (a providerAdapter) Validate(profile Profile) error {
+	if !platformSupported(a.platforms, runtime.GOOS) {
+		return fmt.Errorf("provider %s is not supported on %s", a.name, runtime.GOOS)
+	}
 	if profile.Model != "" && !a.model {
 		return fmt.Errorf("provider %s does not support model settings", a.name)
 	}
@@ -175,7 +185,7 @@ func opencodeInvocation(profile Profile, workspaces []string, prompt string) Inv
 }
 
 func kimiInvocation(profile Profile, workspaces []string, prompt string) Invocation {
-	args := []string{"--print", "--output-format", "stream-json", "--work-dir", workspaces[0]}
+	args := []string{"--print", "--yolo", "--output-format", "stream-json", "--work-dir", workspaces[0]}
 	for _, workspace := range workspaces[1:] {
 		args = append(args, "--add-dir", workspace)
 	}
@@ -183,6 +193,38 @@ func kimiInvocation(profile Profile, workspaces []string, prompt string) Invocat
 		args = append(args, "--model", profile.Model)
 	}
 	return Invocation{Command: "kimi", Args: args, Stdin: prompt}
+}
+
+func openclawInvocation(profile Profile, workspaces []string, prompt string) Invocation {
+	args := []string{"run", "--print", "--full-access", "--output-format", "json", "--work-dir", workspaces[0]}
+	for _, workspace := range workspaces[1:] {
+		args = append(args, "--add-dir", workspace)
+	}
+	if profile.Model != "" {
+		args = append(args, "--model", profile.Model)
+	}
+	if profile.Effort != "" {
+		args = append(args, "--effort", profile.Effort)
+	}
+	return Invocation{Command: "openclaw", Args: args, Stdin: prompt}
+}
+
+func hermesInvocation(profile Profile, workspaces []string, prompt string) Invocation {
+	args := []string{"run", "--dir", workspaces[0], "--unsafe", "--format", "json"}
+	if profile.Model != "" {
+		args = append(args, "--model", profile.Model)
+	}
+	if profile.Variant != "" {
+		args = append(args, "--variant", profile.Variant)
+	}
+	args = append(args, prompt)
+	return Invocation{Command: "hermes", Args: args}
+}
+
+// platformSupported reports whether goos is a supported platform. An empty
+// platforms list means every platform is supported.
+func platformSupported(platforms []string, goos string) bool {
+	return len(platforms) == 0 || slices.Contains(platforms, goos)
 }
 
 func hasFlag(args []string, flag string) bool {

@@ -120,6 +120,14 @@ func CheckProject(ctx context.Context, loaded project.LoadedConfig, registry age
 
 func diagnoseProvider(ctx context.Context, system System, profile agent.Profile) *Diagnostic {
 	switch profile.Provider {
+	case "codex":
+		return authStatusDiagnostic(ctx, system, profile, "codex", []string{"login", "status"}, "codex login")
+	case "kimi":
+		return authStatusDiagnostic(ctx, system, profile, "kimi", []string{"auth", "status"}, "kimi auth login")
+	case "openclaw":
+		return authStatusDiagnostic(ctx, system, profile, "openclaw", []string{"auth", "status"}, "openclaw auth login")
+	case "hermes":
+		return authStatusDiagnostic(ctx, system, profile, "hermes", []string{"auth", "status"}, "hermes auth login")
 	case "claude":
 		output, err := system.Output(ctx, "claude", "auth", "status")
 		if err != nil {
@@ -156,6 +164,17 @@ func diagnoseProvider(ctx context.Context, system System, profile agent.Profile)
 		return &Diagnostic{Name: "Agent Profile " + profile.Name + " model", OK: true, Message: profile.Model + " available"}
 	}
 	return nil
+}
+
+// authStatusDiagnostic reports whether command's CLI is authenticated by
+// running an authentication-status subcommand. Heracles only observes the
+// command's success and never reads or stores credential values.
+func authStatusDiagnostic(ctx context.Context, system System, profile agent.Profile, command string, statusArgs []string, loginCommand string) *Diagnostic {
+	name := "Agent Profile " + profile.Name + " authentication"
+	if _, err := system.Output(ctx, command, statusArgs...); err != nil {
+		return &Diagnostic{Name: name, Message: fmt.Sprintf("%s is not authenticated; run `%s`", command, loginCommand)}
+	}
+	return &Diagnostic{Name: name, OK: true, Message: "authenticated"}
 }
 
 // Check is the public diagnostic application service.

@@ -39,7 +39,7 @@ func TestDetectProvidersReportsExecutableAvailability(t *testing.T) {
 	system := fakeDoctorSystem{installed: map[string]bool{"codex": true}}
 	availability := setup.DetectProviders(agent.DefaultRegistry(), system)
 
-	want := map[string]bool{"codex": true, "claude": false, "opencode": false, "kimi": false}
+	want := map[string]bool{"codex": true, "claude": false, "opencode": false, "kimi": false, "openclaw": false, "hermes": false}
 	if len(availability) != len(want) {
 		t.Fatalf("DetectProviders() returned %d entries, want %d", len(availability), len(want))
 	}

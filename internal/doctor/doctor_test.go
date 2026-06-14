@@ -106,6 +106,58 @@ func TestCheckReportsClaudeAuthenticationFailure(t *testing.T) {
 	}
 }
 
+func TestCheckReportsDirectProviderAuthenticationState(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name      string
+		provider  string
+		runErr    error
+		wantOK    bool
+		wantInLog string
+	}{
+		{name: "codex not authenticated", provider: "codex", runErr: errors.New("not logged in"), wantOK: false, wantInLog: "codex is not authenticated; run `codex login`"},
+		{name: "codex authenticated", provider: "codex", wantOK: true, wantInLog: "authenticated"},
+		{name: "kimi not authenticated", provider: "kimi", runErr: errors.New("not logged in"), wantOK: false, wantInLog: "kimi is not authenticated; run `kimi auth login`"},
+		{name: "kimi authenticated", provider: "kimi", wantOK: true, wantInLog: "authenticated"},
+		{name: "openclaw not authenticated", provider: "openclaw", runErr: errors.New("not logged in"), wantOK: false, wantInLog: "openclaw is not authenticated; run `openclaw auth login`"},
+		{name: "openclaw authenticated", provider: "openclaw", wantOK: true, wantInLog: "authenticated"},
+		{name: "hermes not authenticated", provider: "hermes", runErr: errors.New("not logged in"), wantOK: false, wantInLog: "hermes is not authenticated; run `hermes auth login`"},
+		{name: "hermes authenticated", provider: "hermes", wantOK: true, wantInLog: "authenticated"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			loaded := project.LoadedConfig{
+				Path: filepath.Join(root, "heracles.yaml"),
+				Config: project.Config{
+					Version:      1,
+					IssueTracker: project.IssueTrackerConfig{GitHub: "acme/backlog"},
+					Repositories: []project.RepositoryConfig{{Name: "app", Path: ".", GitHub: "acme/app", BaseBranch: "main"}},
+					Agents: project.AgentConfig{
+						DefaultProfile: "default",
+						Profiles:       map[string]project.ProfileConfig{"default": {Provider: testCase.provider}},
+					},
+				},
+			}
+			system := &fakeSystem{}
+			if testCase.runErr != nil {
+				system.runErr = map[string]error{testCase.provider: testCase.runErr}
+			}
+
+			report := doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+
+			if report.OK != testCase.wantOK {
+				t.Fatalf("Check() report.OK = %v, want %v; report: %s", report.OK, testCase.wantOK, report.String())
+			}
+			if !strings.Contains(report.String(), testCase.wantInLog) {
+				t.Fatalf("report %q does not contain %q", report.String(), testCase.wantInLog)
+			}
+		})
+	}
+}
+
 func TestCheckReportsUnavailableOpenCodeModel(t *testing.T) {
 	t.Parallel()
 
