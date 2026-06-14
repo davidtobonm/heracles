@@ -177,6 +177,7 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 	id := flags.String("id", "", "workflow record ID")
 	problem := flags.String("problem", "", "problem description")
 	prdPath := flags.String("prd", "", "approved PRD path")
+	prdIssueURL := flags.String("prd-issue", "", "published PRD Issue URL")
 	reason := flags.String("reason", "", "decision or operation reason")
 	roleFlags := roleProfileFlags(flags)
 	limit := flags.Int("limit", 0, "attempt at most this many issues during this run")
@@ -231,6 +232,14 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 				return 1
 			}
 			operation.PRD = string(contents)
+		}
+	}
+	if command == "plan" {
+		operation.PRD = *prdPath
+		operation.PRDIssueURL = *prdIssueURL
+		if operation.PRDIssueURL != "" && operation.PRD == "" {
+			fmt.Fprintln(stderr, "heracles plan --prd-issue requires --prd <local-path-to-prd.md>")
+			return 2
 		}
 	}
 	if command == "labor" && (operation.ID == "" || operation.Problem == "") {
@@ -297,7 +306,7 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 
 func interspersedFlags(args []string) []string {
 	valueFlags := map[string]bool{
-		"--config": true, "--id": true, "--problem": true, "--prd": true, "--reason": true, "--limit": true,
+		"--config": true, "--id": true, "--problem": true, "--prd": true, "--prd-issue": true, "--reason": true, "--limit": true,
 	}
 	for _, role := range agentRoles {
 		for _, suffix := range []string{"", "-model", "-effort", "-variant"} {

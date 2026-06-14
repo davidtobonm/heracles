@@ -95,6 +95,36 @@ func (r Runner) Run(ctx context.Context, provider string, profile Profile, works
 	return result, nil
 }
 
+// RunInteractive launches a provider attached to the controlling terminal
+// for one interactive session, inheriting the current process's stdio so
+// the user can converse with the Planner directly.
+func (r Runner) RunInteractive(ctx context.Context, provider string, profile Profile, workspaces []string, prompt string) error {
+	adapter, err := r.registry.Adapter(provider)
+	if err != nil {
+		return err
+	}
+	invocation, err := adapter.InteractiveInvocation(profile, workspaces, prompt)
+	if err != nil {
+		return err
+	}
+
+	command := exec.CommandContext(ctx, invocation.Command, invocation.Args...)
+	command.Dir = workspaces[0]
+	command.Env = AllowedEnvironment(profile.EnvAllowlist, r.environment)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+
+	if err := command.Run(); err != nil {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) {
+			return fmt.Errorf("provider %s exited with code %d", provider, exitError.ExitCode())
+		}
+		return fmt.Errorf("provider %s: %w", provider, err)
+	}
+	return nil
+}
+
 // AllowedEnvironment filters environment variables to an explicit allowlist plus
 // the essential process variables required by authenticated CLI providers.
 func AllowedEnvironment(allowlist, source []string) []string {

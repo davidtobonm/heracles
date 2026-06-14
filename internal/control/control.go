@@ -15,6 +15,7 @@ type Operation struct {
 	PRD          string   `json:"prd,omitempty"`
 	Decision     string   `json:"decision,omitempty"`
 	Reason       string   `json:"reason,omitempty"`
+	PRDIssueURL  string   `json:"prd_issue_url,omitempty"`
 	Limit        int      `json:"limit,omitempty"`
 	Tracker      string   `json:"tracker,omitempty"`
 	Repositories []string `json:"repositories,omitempty"`

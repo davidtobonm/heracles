@@ -14,6 +14,26 @@ type AgentRunner interface {
 	Run(context.Context, string, agent.Profile, []string, string) (agent.Result, error)
 }
 
+// AgentInteractiveRunner is the provider-neutral execution boundary used by
+// SessionService to launch an interactive Grilling Session.
+type AgentInteractiveRunner interface {
+	RunInteractive(context.Context, string, agent.Profile, []string, string) error
+}
+
+// InteractiveAgentRunner adapts an AgentInteractiveRunner to InteractiveRunner.
+type InteractiveAgentRunner struct {
+	Runner AgentInteractiveRunner
+}
+
+// RunInteractive launches profile.Provider attached to the controlling
+// terminal for one interactive session.
+func (runner InteractiveAgentRunner) RunInteractive(ctx context.Context, profile agent.Profile, workspaces []string, prompt string) error {
+	if runner.Runner == nil {
+		return errors.New("Interactive Agent Runner requires a Runner")
+	}
+	return runner.Runner.RunInteractive(ctx, profile.Provider, profile, workspaces, prompt)
+}
+
 // AgentPlanner uses a configured Agent Profile as the Planning Stage Planner.
 type AgentPlanner struct {
 	Runner  AgentRunner

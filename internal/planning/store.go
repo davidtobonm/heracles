@@ -44,6 +44,31 @@ func (store FileStore) Save(_ context.Context, state State) error {
 	return atomicWrite(filepath.Join(store.root, safeID(state.ID), "state.json"), append(contents, '\n'))
 }
 
+// LoadSession reads one durable interactive Planning session.
+func (store FileStore) LoadSession(_ context.Context, id string) (SessionState, error) {
+	contents, err := os.ReadFile(filepath.Join(store.root, safeID(id), "session.json"))
+	if os.IsNotExist(err) {
+		return SessionState{}, ErrSessionNotFound
+	}
+	if err != nil {
+		return SessionState{}, fmt.Errorf("read Planning session: %w", err)
+	}
+	var state SessionState
+	if err := json.Unmarshal(contents, &state); err != nil {
+		return SessionState{}, fmt.Errorf("decode Planning session: %w", err)
+	}
+	return state, nil
+}
+
+// SaveSession atomically writes one durable interactive Planning session.
+func (store FileStore) SaveSession(_ context.Context, state SessionState) error {
+	contents, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode Planning session: %w", err)
+	}
+	return atomicWrite(filepath.Join(store.root, safeID(state.ID), "session.json"), append(contents, '\n'))
+}
+
 // WritePRD atomically writes the stable PRD artifact for one Planning Stage.
 func (store FileStore) WritePRD(_ context.Context, id, prd string) (string, error) {
 	path := filepath.Join(store.root, safeID(id), "PRD.md")
@@ -84,12 +109,32 @@ func safeID(id string) string {
 type MemoryStore struct {
 	mu        sync.Mutex
 	states    map[string]State
+	sessions  map[string]SessionState
 	artifacts map[string]string
 }
 
 // NewMemoryStore creates an empty in-memory store.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{states: make(map[string]State), artifacts: make(map[string]string)}
+	return &MemoryStore{states: make(map[string]State), sessions: make(map[string]SessionState), artifacts: make(map[string]string)}
+}
+
+// LoadSession reads one in-memory interactive Planning session.
+func (store *MemoryStore) LoadSession(_ context.Context, id string) (SessionState, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	state, exists := store.sessions[id]
+	if !exists {
+		return SessionState{}, ErrSessionNotFound
+	}
+	return state, nil
+}
+
+// SaveSession writes one in-memory interactive Planning session.
+func (store *MemoryStore) SaveSession(_ context.Context, state SessionState) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.sessions[state.ID] = state
+	return nil
 }
 
 // Load reads one state.

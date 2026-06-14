@@ -81,6 +81,45 @@ func TestControlCommandsUseSharedSurfaceAndStableJSON(t *testing.T) {
 	}
 }
 
+func TestPlanCommandRecordsPRDIssueURLAndLocalPath(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{
+		"plan", "--id", "session-1",
+		"--prd-issue", "https://github.com/acme/backlog/issues/9",
+		"--prd", ".heracles/planning/session-1/PRD.md",
+	}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 0 {
+		t.Fatalf("plan exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 1 {
+		t.Fatalf("operations = %#v", surface.operations)
+	}
+	operation := surface.operations[0]
+	if operation.Name != "plan" || operation.ID != "session-1" {
+		t.Fatalf("operation = %#v", operation)
+	}
+	if operation.PRDIssueURL != "https://github.com/acme/backlog/issues/9" || operation.PRD != ".heracles/planning/session-1/PRD.md" {
+		t.Errorf("operation = %#v, want recorded PRD Issue URL and local PRD path", operation)
+	}
+}
+
+func TestPlanCommandRejectsPRDIssueWithoutLocalPRDPath(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"plan", "--id", "session-1", "--prd-issue", "https://github.com/acme/backlog/issues/9"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 2 {
+		t.Fatalf("plan exit = %d, want 2; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 0 {
+		t.Errorf("operations = %#v, want no Control Surface call", surface.operations)
+	}
+}
+
 func TestRunAcceptsOriginalAgentLoopFlagsAndLimit(t *testing.T) {
 	t.Parallel()
 

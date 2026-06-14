@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -32,6 +34,7 @@ type Local struct {
 	tracker            *tracker.Service
 	trackerRepo        string
 	planning           planning.Service
+	planningSession    planning.SessionService
 	issues             issuestage.Service
 	workspaces         workspace.Manager
 	implementer        implementation.Implementer
@@ -84,6 +87,13 @@ func NewLocal(ctx context.Context, loaded project.LoadedConfig) (*Local, error) 
 			Planner: planning.AgentPlanner{Runner: runner, Profile: profiles.Roles[agent.RolePlanner]},
 			Store:   planning.NewFileStore(root), QuestionBudget: loaded.Config.Planning.QuestionBudget,
 		},
+		planningSession: planning.SessionService{
+			Runner:         planning.InteractiveAgentRunner{Runner: runner},
+			Store:          planning.NewFileStore(root),
+			Generator:      backgroundIssueGenerator{configPath: loaded.Path, root: root},
+			QuestionBudget: loaded.Config.Planning.QuestionBudget,
+			Profile:        profiles.Roles[agent.RolePlanner],
+		},
 		issues: issuestage.Service{
 			Author: issuestage.AgentIssueAuthor{Runner: runner, Profile: profiles.Roles[agent.RoleIssueAuthor], Workspaces: contextPaths(repositoryContexts)},
 			Store:  issuestage.NewFileStore(root), Publisher: issuestage.NewGitHubPublisher(commandRunner),
@@ -130,7 +140,13 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 		}
 		return result(operation, "ok", report), nil
 	case "plan":
-		state, err := local.planning.Run(ctx, planning.RunRequest{ID: operation.ID, Problem: operation.Problem, Repositories: local.repositoryContexts()})
+		if operation.PRDIssueURL != "" {
+			state, err := local.planningSession.RecordPRDIssue(ctx, operation.ID, operation.PRDIssueURL, operation.PRD)
+			return result(operation, state.Status, state), err
+		}
+		state, err := local.planningSession.Run(ctx, planning.SessionRequest{
+			ID: operation.ID, Problem: operation.Problem, Repositories: local.repositoryContexts(),
+		})
 		return result(operation, state.Status, state), err
 	case "issues":
 		state, err := local.issues.Run(ctx, issuestage.RunRequest{ID: operation.ID, ApprovedPRD: operation.PRD, TrackerRepository: local.trackerRepository()})
@@ -194,6 +210,12 @@ func (local *Local) decide(ctx context.Context, operation Operation) (Result, er
 		return result(operation, state.Status, state), err
 	}
 	if operation.Kind == "planning" {
+		if _, err := local.planningSession.Store.LoadSession(ctx, operation.ID); err == nil {
+			state, err := local.planningSession.Decide(ctx, operation.ID, decision, operation.Reason)
+			return result(operation, state.Status, state), err
+		} else if !errors.Is(err, planning.ErrSessionNotFound) {
+			return Result{}, err
+		}
 		state, err := local.planning.Decide(ctx, operation.ID, decision, operation.Reason)
 		return result(operation, state.Status, state), err
 	}
@@ -455,6 +477,47 @@ func (local *Local) repositoryContexts() []planning.RepositoryContext {
 		contexts[index] = planning.RepositoryContext{Name: repository.Name, Path: repository.Path}
 	}
 	return contexts
+}
+
+// backgroundIssueGenerator launches `heracles issues` as a detached
+// background process once a PRD Issue's Planning Approval Gate is approved,
+// per ADR 0015. Heracles records the issue generation log under the
+// Planning session's durable directory and does not wait for it to finish.
+type backgroundIssueGenerator struct {
+	configPath string
+	root       string
+}
+
+func (generator backgroundIssueGenerator) Generate(_ context.Context, id, prdPath string) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate heracles executable: %w", err)
+	}
+	args := []string{"issues", "--id", id, "--prd", prdPath}
+	if generator.configPath != "" {
+		args = append(args, "--config", generator.configPath)
+	}
+	logPath := filepath.Join(generator.root, ".heracles", "planning", id, "issues.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return fmt.Errorf("create issue generation log directory: %w", err)
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("create issue generation log: %w", err)
+	}
+	command := exec.Command(executable, args...)
+	command.Dir = generator.root
+	command.Stdout = logFile
+	command.Stderr = logFile
+	if err := command.Start(); err != nil {
+		_ = logFile.Close()
+		return fmt.Errorf("start background issue generation: %w", err)
+	}
+	go func() {
+		_ = command.Wait()
+		_ = logFile.Close()
+	}()
+	return nil
 }
 
 func contextPaths(contexts []planning.RepositoryContext) []string {
