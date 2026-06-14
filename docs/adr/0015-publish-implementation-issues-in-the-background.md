@@ -1,0 +1,3 @@
+# Publish implementation issues in the background
+
+After the PRD Issue is approved, Heracles will launch the separately configured Issue Author as a background, non-interactive stage using the bundled `to-issues-for-heracles` skill. The Issue Author validates and publishes Heracles-compatible implementation issues without a separate Issue publication Approval Gate, because this decomposition normally does not require user review. Heracles then proceeds directly into the Implementation Stage. In the exceptional case where safe decomposition is impossible, it publishes no implementation issues, comments the exact clarification needed on the PRD Issue, and marks the Labor blocked so the same PRD Issue can be revised and reapproved.

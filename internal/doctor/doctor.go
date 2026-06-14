@@ -3,6 +3,7 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"slices"
@@ -16,6 +17,7 @@ import (
 type System interface {
 	LookPath(string) (string, error)
 	Run(context.Context, string, ...string) error
+	Output(context.Context, string, ...string) (string, error)
 }
 
 // Diagnostic is one diagnostic result.
@@ -102,8 +104,58 @@ func CheckProject(ctx context.Context, loaded project.LoadedConfig, registry age
 		}
 		_, executableErr := system.LookPath(adapter.Executable())
 		add("Agent Profile "+name, executableErr, profile.Provider+" available and supported")
+		if executableErr == nil {
+			if diagnostic := diagnoseProvider(ctx, system, profile); diagnostic != nil {
+				if diagnostic.OK {
+					report.Checks = append(report.Checks, *diagnostic)
+				} else {
+					report.OK = false
+					report.Checks = append(report.Checks, *diagnostic)
+				}
+			}
+		}
 	}
 	return report
+}
+
+func diagnoseProvider(ctx context.Context, system System, profile agent.Profile) *Diagnostic {
+	switch profile.Provider {
+	case "claude":
+		output, err := system.Output(ctx, "claude", "auth", "status")
+		if err != nil {
+			return &Diagnostic{Name: "Agent Profile " + profile.Name + " authentication", Message: err.Error()}
+		}
+		var status struct {
+			LoggedIn bool `json:"loggedIn"`
+		}
+		if err := json.Unmarshal([]byte(output), &status); err != nil {
+			return &Diagnostic{Name: "Agent Profile " + profile.Name + " authentication", Message: fmt.Sprintf("read claude auth status: %v", err)}
+		}
+		if !status.LoggedIn {
+			return &Diagnostic{Name: "Agent Profile " + profile.Name + " authentication", Message: "claude is not authenticated; run `claude auth login`"}
+		}
+		return &Diagnostic{Name: "Agent Profile " + profile.Name + " authentication", OK: true, Message: "authenticated"}
+	case "opencode":
+		output, err := system.Output(ctx, "opencode", "providers", "list")
+		if err != nil {
+			return &Diagnostic{Name: "Agent Profile " + profile.Name + " authentication", Message: err.Error()}
+		}
+		if strings.Contains(output, "0 credentials") {
+			return &Diagnostic{Name: "Agent Profile " + profile.Name + " authentication", Message: "opencode has no configured credentials; run `opencode providers login`"}
+		}
+		if profile.Model == "" {
+			return &Diagnostic{Name: "Agent Profile " + profile.Name + " authentication", OK: true, Message: "credentials configured"}
+		}
+		modelsOutput, err := system.Output(ctx, "opencode", "models")
+		if err != nil {
+			return &Diagnostic{Name: "Agent Profile " + profile.Name + " model", Message: err.Error()}
+		}
+		if !strings.Contains(modelsOutput, profile.Model) {
+			return &Diagnostic{Name: "Agent Profile " + profile.Name + " model", Message: fmt.Sprintf("opencode model %q is unavailable; run `opencode models` to choose a supported provider/model", profile.Model)}
+		}
+		return &Diagnostic{Name: "Agent Profile " + profile.Name + " model", OK: true, Message: profile.Model + " available"}
+	}
+	return nil
 }
 
 // Check is the public diagnostic application service.
@@ -125,6 +177,12 @@ func (OSSystem) LookPath(executable string) (string, error) {
 
 // Run executes a non-agent diagnostic command.
 func (OSSystem) Run(ctx context.Context, command string, args ...string) error {
+	_, err := (OSSystem{}).Output(ctx, command, args...)
+	return err
+}
+
+// Output executes a non-agent diagnostic command and returns combined output.
+func (OSSystem) Output(ctx context.Context, command string, args ...string) (string, error) {
 	process := exec.CommandContext(ctx, command, args...)
 	output, err := process.CombinedOutput()
 	if err != nil {
@@ -132,7 +190,7 @@ func (OSSystem) Run(ctx context.Context, command string, args ...string) error {
 		if message == "" {
 			message = err.Error()
 		}
-		return fmt.Errorf("%s", message)
+		return string(output), fmt.Errorf("%s", message)
 	}
-	return nil
+	return string(output), nil
 }

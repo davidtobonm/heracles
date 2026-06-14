@@ -9,11 +9,11 @@ An end-to-end delivery workflow that moves through planning, issue creation, and
 _Avoid_: Full run, pipeline
 
 **Planning Stage**:
-The part of a Labor where an agent clarifies the problem and produces the necessary product and domain documentation.
+The part of a Labor where a Planner conducts a Grilling Session, clarifies the problem, and produces the necessary product and domain documentation.
 _Avoid_: Discovery run
 
 **Issue Stage**:
-The part of a Labor where an approved product requirements document is converted into implementation-ready issues.
+The background part of a Labor where an approved PRD Issue is converted into published implementation-ready issues.
 _Avoid_: Ticket generation
 
 **Implementation Stage**:
@@ -21,7 +21,7 @@ The part of a Labor where ready issues are implemented, reviewed, and resolved.
 _Avoid_: Agent queue
 
 **Approval Gate**:
-A required human decision that permits a Labor to proceed from one stage to the next.
+A required human decision that permits a Labor to proceed at a defined controlled transition without requiring the active Grilling Session to end.
 _Avoid_: Checkpoint
 
 **Target Repository**:
@@ -40,13 +40,29 @@ _Avoid_: Cross-repository PR
 An implementation-ready issue that Heracles may claim and execute without human interaction.
 _Avoid_: Actionable issue, queued issue
 
+**Defined Backlog**:
+The implementation issues linked to one PRD Issue that a Labor is responsible for completing.
+_Avoid_: All ready issues, tracker backlog
+
 **Claimed Issue**:
 A Ready Issue reserved by one active Labor to prevent concurrent execution.
 _Avoid_: In-progress ticket
 
+**Review Issue**:
+An issue whose verified Change Set awaits human pull-request review or merge before it can be completed.
+_Avoid_: Done issue, blocked issue
+
 **Blocked Issue**:
 An issue that cannot proceed because a dependency, failed execution, or required decision remains unresolved.
 _Avoid_: Failed issue
+
+**Obsolete Issue**:
+An untouched implementation issue that no longer belongs to the current approved revision of its Parent PRD and must not be executed.
+_Avoid_: Deleted issue, cancelled issue
+
+**Blocked Labor**:
+A Labor that cannot advance without exceptional clarification or operator action.
+_Avoid_: Paused Labor
 
 **HITL Issue**:
 An issue that requires human interaction and must not be executed unattended.
@@ -56,17 +72,25 @@ _Avoid_: Manual issue
 The GitHub repository whose issues define and track work for a Labor. It may be separate from every target repository.
 _Avoid_: Planning repo, backlog repo
 
+**PRD Issue**:
+A GitHub issue published by the Planner from the Grilling Session, containing the product requirements that govern the subsequent Issue Stage. It keeps one identity across revisions and exposes whether it is under review or approved.
+_Avoid_: Local PRD, planning artifact
+
 **Planner**:
 The agent responsible for clarifying a problem, lazily maintaining necessary domain documentation, and producing a product requirements document.
 _Avoid_: Main agent
 
 **Issue Author**:
-The agent responsible for converting an approved product requirements document into Heracles-compatible tracer-bullet issues.
+The agent responsible for converting an approved PRD Issue into Heracles-compatible tracer-bullet issues without requiring an interactive review session.
 _Avoid_: Ticket writer
 
 **Question Budget**:
-The expected maximum number of questions for a Planning Stage. It guides the Planner toward focus but may be exceeded with explicit user permission.
+The expected maximum number of questions for a Grilling Session. It guides the Planner toward focus but may be exceeded with explicit user permission.
 _Avoid_: Question limit
+
+**Grilling Session**:
+A focused Planning Stage interview in which the Planner challenges assumptions and resolves ambiguity with the user before producing a product requirements document.
+_Avoid_: Grill me session, questionnaire
 
 **Agent Profile**:
 A reusable configuration describing which agent CLI to invoke and the supported runtime settings to apply.
@@ -75,6 +99,10 @@ _Avoid_: Provider configuration
 **Agent Role**:
 A responsibility within a Labor assigned an Agent Profile: Planner, Issue Author, Implementer, or Reviewer.
 _Avoid_: Agent type
+
+**Preference**:
+A user-selected default for an Agent Role or Labor behavior that overrides portable Project Configuration without changing it.
+_Avoid_: Project setting, profile
 
 **Red Evidence**:
 A recorded verification command and failing result that demonstrates the intended behavior was not satisfied before implementation.

@@ -61,7 +61,9 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Generate checksums
-        run: sha256sum dist/heracles-* > dist/checksums.txt
+        run: |
+          cd dist
+          sha256sum heracles-* > checksums.txt
       - uses: softprops/action-gh-release@v3
         with:
           files: |

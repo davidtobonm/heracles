@@ -8,13 +8,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
+	"time"
 
 	"github.com/davidtobonm/heracles/internal/agent"
 	"github.com/davidtobonm/heracles/internal/buildinfo"
 	"github.com/davidtobonm/heracles/internal/control"
 	"github.com/davidtobonm/heracles/internal/doctor"
+	"github.com/davidtobonm/heracles/internal/install"
 	"github.com/davidtobonm/heracles/internal/mcp"
 	"github.com/davidtobonm/heracles/internal/project"
+	"github.com/davidtobonm/heracles/internal/update"
+	"gopkg.in/yaml.v3"
 )
 
 const help = `Heracles coordinates agent-driven software delivery.
@@ -35,17 +41,25 @@ Available Commands:
   heracles retry      Retry a failed or blocked issue attempt
   heracles resume     Resume an interrupted or blocked Labor
   heracles cancel     Cancel a Labor
+  heracles config     Show or set global and project Agent Role preferences
   heracles doctor     Validate a project before starting a Labor
   heracles init       Initialize a portable Project Configuration
+  heracles install    Install the Heracles binary into a user or system command location
+  heracles update     Check for or apply Heracles self-updates
   heracles version    Print Heracles version information
 `
 
 // Options supplies process-level dependencies to the CLI.
 type Options struct {
 	WorkingDirectory string
+	HomeDirectory    string
 	DoctorSystem     doctor.System
 	Control          control.Surface
 	Input            io.Reader
+	Executable       string
+	UpdateSource     update.Source
+	UpdateCachePath  string
+	Now              func() time.Time
 }
 
 // Run executes the Heracles CLI and returns a process exit code.
@@ -66,6 +80,18 @@ func RunWithOptions(args []string, stdout, stderr io.Writer, options Options) in
 
 	if args[0] == "doctor" {
 		return runDoctor(args[1:], stdout, stderr, options)
+	}
+
+	if args[0] == "config" {
+		return runConfig(args[1:], stdout, stderr, options)
+	}
+
+	if args[0] == "install" {
+		return runInstall(args[1:], stdout, stderr, options)
+	}
+
+	if args[0] == "update" {
+		return runUpdate(args[1:], stdout, stderr, options)
 	}
 
 	if args[0] == "version" {
@@ -133,13 +159,26 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 	problem := flags.String("problem", "", "problem description")
 	prdPath := flags.String("prd", "", "approved PRD path")
 	reason := flags.String("reason", "", "decision or operation reason")
+	implementerProvider := flags.String("implementer", "", "override Implementer provider for this launch")
+	implementerModel := flags.String("implementer-model", "", "override Implementer model for this launch")
+	implementerEffort := flags.String("implementer-effort", "", "override Implementer effort for this launch")
+	implementerVariant := flags.String("implementer-variant", "", "override Implementer variant for this launch")
+	reviewerProvider := flags.String("reviewer", "", "override Reviewer provider for this launch")
+	reviewerModel := flags.String("reviewer-model", "", "override Reviewer model for this launch")
+	reviewerEffort := flags.String("reviewer-effort", "", "override Reviewer effort for this launch")
+	reviewerVariant := flags.String("reviewer-variant", "", "override Reviewer variant for this launch")
+	limit := flags.Int("limit", 0, "attempt at most this many issues during this run")
 	if err := flags.Parse(interspersedFlags(args)); errors.Is(err, flag.ErrHelp) {
 		return 0
 	} else if err != nil {
 		return 2
 	}
 
-	operation := control.Operation{Name: command, ID: *id, Problem: *problem, Reason: *reason}
+	operation := control.Operation{Name: command, ID: *id, Problem: *problem, Reason: *reason, Limit: *limit}
+	if operation.Limit < 0 {
+		fmt.Fprintln(stderr, "--limit must be positive")
+		return 2
+	}
 	positionals := flags.Args()
 	switch command {
 	case "list":
@@ -191,7 +230,12 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 		return 2
 	}
 
-	surface, owned, err := controlSurface(options, *configPath)
+	overrides := map[string]project.ProfileConfig{
+		"implementer": {Provider: *implementerProvider, Model: *implementerModel, Effort: *implementerEffort, Variant: *implementerVariant},
+		"reviewer":    {Provider: *reviewerProvider, Model: *reviewerModel, Effort: *reviewerEffort, Variant: *reviewerVariant},
+	}
+	overrides = nonEmptyProfiles(overrides)
+	surface, owned, err := controlSurface(options, *configPath, overrides)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -229,7 +273,11 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 }
 
 func interspersedFlags(args []string) []string {
-	valueFlags := map[string]bool{"--config": true, "--id": true, "--problem": true, "--prd": true, "--reason": true}
+	valueFlags := map[string]bool{
+		"--config": true, "--id": true, "--problem": true, "--prd": true, "--reason": true, "--limit": true,
+		"--implementer": true, "--implementer-model": true, "--implementer-effort": true, "--implementer-variant": true,
+		"--reviewer": true, "--reviewer-model": true, "--reviewer-effort": true, "--reviewer-variant": true,
+	}
 	var flags []string
 	var positionals []string
 	for index := 0; index < len(args); index++ {
@@ -255,7 +303,113 @@ func interspersedFlags(args []string) []string {
 	return append(flags, positionals...)
 }
 
-func controlSurface(options Options, explicitConfig string) (control.Surface, bool, error) {
+func applyPreferences(loaded *project.LoadedConfig, home string, launch map[string]project.ProfileConfig) error {
+	globalPath, err := project.GlobalPreferencesPath(home)
+	if err != nil {
+		return err
+	}
+	global, err := project.LoadPreferences(globalPath)
+	if err != nil {
+		return err
+	}
+	local, err := project.LoadPreferences(project.ProjectPreferencesPath(loaded.Path))
+	if err != nil {
+		return err
+	}
+	preferences := project.MergeRolePreferences(global.Agents, local.Agents)
+	preferences = project.MergeRolePreferences(preferences, launch)
+	return project.ApplyRolePreferences(&loaded.Config, preferences)
+}
+
+func runConfig(args []string, stdout, stderr io.Writer, options Options) int {
+	if len(args) == 0 || (args[0] != "set" && args[0] != "show") {
+		fmt.Fprintln(stderr, "usage: heracles config <set|show> (--global|--project) [Agent Role options]")
+		return 2
+	}
+	command := args[0]
+	flags := flag.NewFlagSet("heracles config "+command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	global := flags.Bool("global", false, "use global preferences")
+	projectScope := flags.Bool("project", false, "use discovered project preferences")
+	configPath := flags.String("config", "", "select Project Configuration path")
+	implementer := profileFlags(flags, "implementer")
+	reviewer := profileFlags(flags, "reviewer")
+	if err := flags.Parse(args[1:]); errors.Is(err, flag.ErrHelp) {
+		return 0
+	} else if err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || *global == *projectScope {
+		fmt.Fprintln(stderr, "select exactly one of --global or --project")
+		return 2
+	}
+
+	path, err := preferencesPath(options, *configPath, *global)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	preferences, err := project.LoadPreferences(path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if command == "show" {
+		contents, err := yaml.Marshal(preferences)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprint(stdout, string(contents))
+		return 0
+	}
+
+	updates := map[string]project.ProfileConfig{"implementer": *implementer, "reviewer": *reviewer}
+	updates = nonEmptyProfiles(updates)
+	if len(updates) == 0 {
+		fmt.Fprintln(stderr, "heracles config set requires at least one Agent Role option")
+		return 2
+	}
+	preferences.Agents = project.MergeRolePreferences(preferences.Agents, updates)
+	if err := project.WritePreferences(path, preferences); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Updated preferences: %s\n", path)
+	return 0
+}
+
+func profileFlags(flags *flag.FlagSet, role string) *project.ProfileConfig {
+	profile := &project.ProfileConfig{}
+	flags.StringVar(&profile.Provider, role, "", "set "+role+" provider")
+	flags.StringVar(&profile.Model, role+"-model", "", "set "+role+" model")
+	flags.StringVar(&profile.Effort, role+"-effort", "", "set "+role+" effort")
+	flags.StringVar(&profile.Variant, role+"-variant", "", "set "+role+" variant")
+	return profile
+}
+
+func nonEmptyProfiles(profiles map[string]project.ProfileConfig) map[string]project.ProfileConfig {
+	result := make(map[string]project.ProfileConfig)
+	for role, profile := range profiles {
+		if profile.Provider != "" || profile.Model != "" || profile.Effort != "" || profile.Variant != "" {
+			result[role] = profile
+		}
+	}
+	return result
+}
+
+func preferencesPath(options Options, explicitConfig string, global bool) (string, error) {
+	if global {
+		return project.GlobalPreferencesPath(options.HomeDirectory)
+	}
+	path, err := project.Discover(options.WorkingDirectory, explicitConfig)
+	if err != nil {
+		return "", err
+	}
+	return project.ProjectPreferencesPath(path), nil
+}
+
+func controlSurface(options Options, explicitConfig string, launch map[string]project.ProfileConfig) (control.Surface, bool, error) {
 	if options.Control != nil {
 		return options.Control, false, nil
 	}
@@ -265,6 +419,9 @@ func controlSurface(options Options, explicitConfig string) (control.Surface, bo
 	}
 	loaded, err := project.Load(path)
 	if err != nil {
+		return nil, false, err
+	}
+	if err := applyPreferences(&loaded, options.HomeDirectory, launch); err != nil {
 		return nil, false, err
 	}
 	surface, err := control.NewLocal(context.Background(), loaded)
@@ -292,6 +449,10 @@ func runDoctor(args []string, stdout, stderr io.Writer, options Options) int {
 	}
 	loaded, err := project.Load(path)
 	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err := applyPreferences(&loaded, options.HomeDirectory, nil); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -338,6 +499,159 @@ func runInit(args []string, stdout, stderr io.Writer, options Options) int {
 	}
 
 	fmt.Fprintf(stdout, "Initialized Project Configuration at %s\n", result.Path)
+	return 0
+}
+
+func runInstall(args []string, stdout, stderr io.Writer, options Options) int {
+	flags := flag.NewFlagSet("heracles install", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	system := flags.Bool("system", false, "install into the system command location instead of the user location")
+	dir := flags.String("dir", "", "install into an explicit directory instead of the default location")
+	jsonOutput := flags.Bool("json", false, "emit stable machine-readable JSON")
+	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
+		return 0
+	} else if err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "heracles install does not accept positional arguments")
+		return 2
+	}
+
+	scope := install.ScopeUser
+	if *system {
+		scope = install.ScopeSystem
+	}
+	homeDir, _ := os.UserHomeDir()
+	env := install.Environment{GOOS: runtime.GOOS, Getenv: os.Getenv, HomeDir: homeDir}
+	target, err := install.Resolve(scope, *dir, env)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	source := options.Executable
+	if source == "" {
+		source, err = os.Executable()
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	if err := install.Install(source, target); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	onPath := install.OnPath(target.Dir, env)
+	if *jsonOutput {
+		if err := json.NewEncoder(stdout).Encode(map[string]any{"path": target.Path, "directory": target.Dir, "on_path": onPath}); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+
+	fmt.Fprintf(stdout, "Installed heracles to %s\n", target.Path)
+	if !onPath {
+		fmt.Fprintf(stdout, "%s is not on PATH; add it to use the heracles command directly.\n", target.Dir)
+	}
+	return 0
+}
+
+func runUpdate(args []string, stdout, stderr io.Writer, options Options) int {
+	flags := flag.NewFlagSet("heracles update", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	apply := flags.Bool("apply", false, "download, verify, and install the latest release in place of the running binary")
+	check := flags.Bool("check", false, "force a fresh update check, bypassing the cache")
+	jsonOutput := flags.Bool("json", false, "emit stable machine-readable JSON")
+	owner := flags.String("owner", "davidtobonm", "release repository owner")
+	repo := flags.String("repo", "heracles", "release repository name")
+	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
+		return 0
+	} else if err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "heracles update does not accept positional arguments")
+		return 2
+	}
+
+	source := options.UpdateSource
+	if source == nil {
+		source = update.GitHubSource{Owner: *owner, Repo: *repo}
+	}
+	cachePath := options.UpdateCachePath
+	if cachePath == "" {
+		cacheDir, err := os.UserCacheDir()
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		cachePath = filepath.Join(cacheDir, "heracles", "update.json")
+	}
+	now := time.Now
+	if options.Now != nil {
+		now = options.Now
+	}
+
+	ctx := context.Background()
+	result, err := update.Check(ctx, source, cachePath, buildinfo.Version(), now(), update.DefaultInterval, *check || *apply)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	applied := false
+	if *apply && result.UpdateAvailable {
+		release, err := source.Latest(ctx)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		binary, err := update.DownloadVerified(ctx, source, release, runtime.GOOS, runtime.GOARCH)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		executable := options.Executable
+		if executable == "" {
+			executable, err = os.Executable()
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+		}
+		if err := update.Apply(executable, binary); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		applied = true
+	}
+
+	if *jsonOutput {
+		payload := map[string]any{
+			"current_version":  result.CurrentVersion,
+			"latest_version":   result.LatestVersion,
+			"update_available": result.UpdateAvailable,
+			"checked":          result.Checked,
+			"applied":          applied,
+		}
+		if err := json.NewEncoder(stdout).Encode(payload); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+
+	switch {
+	case applied:
+		fmt.Fprintf(stdout, "updated heracles %s -> %s\n", result.CurrentVersion, result.LatestVersion)
+	case *apply:
+		fmt.Fprintln(stdout, "heracles is already up to date")
+	case result.UpdateAvailable:
+		fmt.Fprintf(stdout, "update available: %s -> %s\n", result.CurrentVersion, result.LatestVersion)
+	}
 	return 0
 }
 

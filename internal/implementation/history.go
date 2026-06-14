@@ -64,6 +64,10 @@ func (store HistoryStore) Save(ctx context.Context, state State) error {
 		}); err != nil {
 			return err
 		}
+	} else if state.Workspace.Root != "" && attempt.WorkspacePath != state.Workspace.Root {
+		if err := store.history.UpdateIssueAttemptWorkspacePath(ctx, state.AttemptID, state.Workspace.Root); err != nil {
+			return err
+		}
 	}
 	if state.ChangeSet.ID != "" {
 		snapshot, err = store.history.Snapshot(ctx, state.LaborID)

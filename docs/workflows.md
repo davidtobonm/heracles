@@ -24,6 +24,21 @@ heracles approve issues issues-1
 heracles run
 ```
 
+The Implementation Stage also accepts the original agent-loop launch overrides:
+
+```sh
+heracles run \
+  --implementer opencode \
+  --implementer-model opencode-go/kimi-k2.6 \
+  --implementer-effort medium \
+  --reviewer codex \
+  --reviewer-model gpt-5.5 \
+  --reviewer-effort high \
+  --limit 40
+```
+
+Omit `--limit` to continue until all compatible Ready Issues are completed or the remaining backlog is genuinely blocked.
+
 ## Operate Interrupted Work
 
 ```sh

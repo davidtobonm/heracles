@@ -20,6 +20,28 @@ Versioned release binaries for Linux, macOS, and Windows are published from `v*`
 
 Download the binary for your operating system and architecture from [GitHub Releases](https://github.com/davidtobonm/heracles/releases), verify it against `checksums.txt`, make it executable on Linux or macOS, and place it on `PATH`.
 
+## Self-Install And Self-Update
+
+Once a downloaded binary is executable, it can install itself:
+
+```sh
+heracles install
+heracles install --system
+heracles install --dir /custom/path
+```
+
+`heracles install` creates the target directory if needed, copies itself there, and reports whether the directory is already on `PATH`. Add `--json` for a stable machine-readable result.
+
+`heracles update` checks GitHub Releases for a newer version, caching the result so repeated checks stay silent and inexpensive:
+
+```sh
+heracles update
+heracles update --check
+heracles update --apply
+```
+
+`heracles update --apply` downloads the release binary matching the current OS and architecture, verifies it against the release's `checksums.txt`, and only then atomically replaces the running executable.
+
 ## Develop
 
 ```sh
@@ -83,6 +105,32 @@ agents:
 Heracles supports Codex, Claude Code, OpenCode, and Kimi Code. Provider-specific model, effort, and variant settings are validated instead of silently ignored. Run `heracles doctor` before a Labor to validate the Project Configuration, Target Repositories, GitHub authentication, Agent Profiles, capabilities, and required executables. Diagnostics never invoke a paid agent session.
 
 See [Provider Capabilities](docs/providers.md) for the exact capability matrix and official CLI references. Validated topology examples live under [`examples/`](examples/).
+
+Launch-time Agent Role overrides preserve the original agent-loop command vocabulary and take precedence over configured preferences:
+
+```sh
+heracles run \
+  --implementer opencode \
+  --implementer-model opencode-go/kimi-k2.6 \
+  --implementer-effort medium \
+  --reviewer codex \
+  --reviewer-model gpt-5.5 \
+  --reviewer-effort high \
+  --limit 40
+```
+
+`--limit` caps issues attempted by that invocation; omit it to drain all compatible Ready Issues. For OpenCode, the compatibility `--implementer-effort` and `--reviewer-effort` flags map to OpenCode variants.
+
+Persist the same choices without editing `heracles.yaml`:
+
+```sh
+heracles config set --global --implementer opencode --implementer-model opencode-go/kimi-k2.6 --implementer-effort medium
+heracles config set --project --reviewer codex --reviewer-model gpt-5.5 --reviewer-effort high
+heracles config show --global
+heracles config show --project
+```
+
+Precedence is launch flags, project preferences, global preferences, then `heracles.yaml`. Global preferences live at `~/.config/heracles/preferences.yaml`; project preferences live at `.heracles/preferences.yaml`.
 
 ## Planning Stage
 

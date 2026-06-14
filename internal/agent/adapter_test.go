@@ -32,7 +32,14 @@ func TestProviderAdaptersBuildValidatedNonInteractiveInvocations(t *testing.T) {
 			provider: "claude",
 			profile:  agent.Profile{Model: "sonnet", Effort: "high"},
 			command:  "claude",
-			args:     []string{"-p", "--output-format", "stream-json", "--add-dir", "/shared", "--model", "sonnet", "--effort", "high"},
+			args:     []string{"-p", "--output-format", "stream-json", "--verbose", "--add-dir", "/shared", "--model", "sonnet", "--effort", "high"},
+			stdin:    "do the work",
+		},
+		{
+			provider: "claude",
+			profile:  agent.Profile{Model: "sonnet", Effort: "high", ExtraArgs: []string{"--output-format", "json", "--json-schema", "{\"type\":\"object\"}"}},
+			command:  "claude",
+			args:     []string{"-p", "--model", "sonnet", "--effort", "high", "--output-format", "json", "--json-schema", "{\"type\":\"object\"}"},
 			stdin:    "do the work",
 		},
 		{
