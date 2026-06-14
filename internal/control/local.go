@@ -52,10 +52,17 @@ type Local struct {
 	changeRepositories []changeset.Repository
 	scheduler          scheduler.Scheduler
 	profile            string
+	doctorSystem       doctor.System
 }
 
 // NewLocal wires the configured application services.
 func NewLocal(ctx context.Context, loaded project.LoadedConfig) (*Local, error) {
+	return NewLocalWithSystem(ctx, loaded, doctor.OSSystem{})
+}
+
+// NewLocalWithSystem wires the configured application services using system
+// for Doctor preflight checks, per ADR 0027.
+func NewLocalWithSystem(ctx context.Context, loaded project.LoadedConfig, system doctor.System) (*Local, error) {
 	profiles, err := agent.ResolveProfiles(loaded.Config.Agents)
 	if err != nil {
 		return nil, err
@@ -134,7 +141,8 @@ func NewLocal(ctx context.Context, loaded project.LoadedConfig) (*Local, error) 
 			Concurrency:   loaded.Config.Labor.IssueConcurrency,
 			ProfileLimits: map[string]int{profiles.Roles[agent.RoleImplementer].Name: profiles.Roles[agent.RoleImplementer].Concurrency},
 		},
-		profile: profiles.Roles[agent.RoleImplementer].Name,
+		profile:      profiles.Roles[agent.RoleImplementer].Name,
+		doctorSystem: system,
 	}
 	return local, nil
 }
@@ -150,7 +158,12 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 	case "init":
 		return result(operation, "initialized", local.loaded), nil
 	case "doctor":
-		report := doctor.Check(ctx, local.loaded, agent.DefaultRegistry(), doctor.OSSystem{})
+		var report doctor.Report
+		if operation.Kind == "fix" {
+			report = doctor.FixProject(ctx, local.loaded, agent.DefaultRegistry(), local.doctorSystem)
+		} else {
+			report = doctor.Check(ctx, local.loaded, agent.DefaultRegistry(), local.doctorSystem)
+		}
 		if !report.OK {
 			return result(operation, "failed", report), errors.New("project diagnostics failed")
 		}
@@ -174,6 +187,9 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 		})
 		return result(operation, state.Status, state), err
 	case "run":
+		if report, err := local.preflight(ctx); err != nil {
+			return result(operation, "blocked", report), err
+		}
 		backlog := local.backlog("implementation-direct", "", operation.RetryUntilPass)
 		backlog.Limit = operation.Limit
 		backlog.PRDURL = operation.PRDIssueURL
@@ -184,6 +200,9 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 		}
 		return result(operation, status, value), err
 	case "labor":
+		if report, err := local.preflight(ctx); err != nil {
+			return result(operation, "blocked", report), err
+		}
 		if existing, err := labor.NewFileStore(local.root).Load(ctx, operation.ID); err == nil {
 			if operation.Problem != "" && existing.Problem != "" && existing.Problem != operation.Problem {
 				return Result{}, fmt.Errorf("Labor %q already exists with a different problem", operation.ID)
@@ -198,6 +217,9 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 	case "approve", "reject":
 		return local.decide(ctx, operation)
 	case "resume":
+		if report, err := local.preflight(ctx); err != nil {
+			return result(operation, "blocked", report), err
+		}
 		state, err := local.labor(operation.ID).Resume(ctx, operation.ID)
 		return result(operation, state.Status, state), err
 	case "cancel":
@@ -254,6 +276,16 @@ func (local *Local) decide(ctx context.Context, operation Operation) (Result, er
 		state, err = local.issues.Publish(ctx, operation.ID)
 	}
 	return result(operation, state.Status, state), err
+}
+
+// preflight runs a non-mutating Doctor check before every Labor execution,
+// per ADR 0027. Warnings do not block; blocking findings stop execution.
+func (local *Local) preflight(ctx context.Context) (doctor.Report, error) {
+	report := doctor.Check(ctx, local.loaded, agent.DefaultRegistry(), local.doctorSystem)
+	if !report.OK {
+		return report, fmt.Errorf("Doctor preflight failed:\n%s", report.String())
+	}
+	return report, nil
 }
 
 func (local *Local) labor(id string) labor.Service {

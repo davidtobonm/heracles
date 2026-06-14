@@ -38,7 +38,7 @@ func TestRunNewProjectFastSetup(t *testing.T) {
 
 	dir := newGitRepo(t, true)
 	io, _ := newSetupIO(strings.Repeat("\n", 6))
-	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true}}
+	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true, "gofmt": true, "go": true}}
 
 	result, err := setup.Run(context.Background(), setup.Options{
 		WorkingDirectory: dir,
@@ -98,7 +98,7 @@ func TestRunNewProjectCompleteSetup(t *testing.T) {
 		"", "API_KEY,DB_URL", // verification confirm + env vars
 	}
 	io, _ := newSetupIO(strings.Join(inputs, "\n") + "\n")
-	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true, "claude": true, "opencode": true}}
+	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true, "claude": true, "opencode": true, "gofmt": true, "go": true}}
 
 	result, err := setup.Run(context.Background(), setup.Options{
 		WorkingDirectory: dir,
@@ -153,7 +153,7 @@ func TestRunExistingProjectFastReconfigure(t *testing.T) {
 	}
 
 	io, _ := newSetupIO(strings.Repeat("\n", 6))
-	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true}}
+	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true, "gofmt": true, "go": true}}
 
 	result, err := setup.Run(context.Background(), setup.Options{
 		WorkingDirectory: dir,
@@ -184,7 +184,7 @@ func TestRunExistingProjectRepairPublishesBootstrap(t *testing.T) {
 	}
 
 	io, out := newSetupIO("3\nn\n")
-	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true}}
+	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true, "gofmt": true, "go": true}}
 	publisher := &fakePublisher{}
 	var ranBootstrap bool
 
@@ -229,7 +229,7 @@ func TestRunExistingProjectRepairRunsBootstrapBacklogWhenAccepted(t *testing.T) 
 	}
 
 	io, _ := newSetupIO("3\ny\n")
-	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true}}
+	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true, "gofmt": true, "go": true}}
 	var ranBootstrap bool
 
 	_, err := setup.Run(context.Background(), setup.Options{
@@ -266,7 +266,7 @@ func TestRunExistingProjectCancelMakesNoChanges(t *testing.T) {
 	}
 
 	io, _ := newSetupIO("4\n")
-	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true}}
+	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true, "gofmt": true, "go": true}}
 
 	result, err := setup.Run(context.Background(), setup.Options{
 		WorkingDirectory: dir,
