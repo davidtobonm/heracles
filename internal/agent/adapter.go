@@ -21,6 +21,7 @@ type Adapter interface {
 	Capabilities() Capabilities
 	Validate(Profile) error
 	Invocation(Profile, []string, string) (Invocation, error)
+	InteractiveInvocation(Profile, []string, string) (Invocation, error)
 }
 
 // Capabilities declares the profile settings supported by one provider. An
@@ -41,12 +42,12 @@ type Registry struct {
 // DefaultRegistry returns the supported v1 provider adapters.
 func DefaultRegistry() Registry {
 	adapters := []Adapter{
-		providerAdapter{name: "codex", executable: "codex", model: true, efforts: []string{"low", "medium", "high", "xhigh"}, build: codexInvocation},
-		providerAdapter{name: "claude", executable: "claude", model: true, efforts: []string{"low", "medium", "high", "max"}, build: claudeInvocation},
-		providerAdapter{name: "opencode", executable: "opencode", model: true, variant: true, promptArg: true, build: opencodeInvocation},
-		providerAdapter{name: "kimi", executable: "kimi", model: true, build: kimiInvocation},
-		providerAdapter{name: "openclaw", executable: "openclaw", model: true, efforts: []string{"low", "medium", "high"}, build: openclawInvocation},
-		providerAdapter{name: "hermes", executable: "hermes", model: true, variant: true, promptArg: true, build: hermesInvocation},
+		providerAdapter{name: "codex", executable: "codex", model: true, efforts: []string{"low", "medium", "high", "xhigh"}, build: codexInvocation, interactiveBuild: codexInteractiveInvocation},
+		providerAdapter{name: "claude", executable: "claude", model: true, efforts: []string{"low", "medium", "high", "max"}, build: claudeInvocation, interactiveBuild: claudeInteractiveInvocation},
+		providerAdapter{name: "opencode", executable: "opencode", model: true, variant: true, promptArg: true, build: opencodeInvocation, interactiveBuild: opencodeInteractiveInvocation},
+		providerAdapter{name: "kimi", executable: "kimi", model: true, build: kimiInvocation, interactiveBuild: kimiInteractiveInvocation},
+		providerAdapter{name: "openclaw", executable: "openclaw", model: true, efforts: []string{"low", "medium", "high"}, build: openclawInvocation, interactiveBuild: openclawInteractiveInvocation},
+		providerAdapter{name: "hermes", executable: "hermes", model: true, variant: true, promptArg: true, build: hermesInvocation, interactiveBuild: hermesInteractiveInvocation},
 	}
 	registry := Registry{adapters: make(map[string]Adapter, len(adapters)), order: make([]string, len(adapters))}
 	for index, adapter := range adapters {
@@ -71,14 +72,15 @@ func (r Registry) Names() []string {
 }
 
 type providerAdapter struct {
-	name       string
-	executable string
-	model      bool
-	efforts    []string
-	variant    bool
-	platforms  []string
-	promptArg  bool
-	build      func(Profile, []string, string) Invocation
+	name             string
+	executable       string
+	model            bool
+	efforts          []string
+	variant          bool
+	platforms        []string
+	promptArg        bool
+	build            func(Profile, []string, string) Invocation
+	interactiveBuild func(Profile, []string, string) Invocation
 }
 
 func (a providerAdapter) Name() string {
@@ -123,14 +125,28 @@ func (a providerAdapter) Validate(profile Profile) error {
 }
 
 func (a providerAdapter) Invocation(profile Profile, workspaces []string, prompt string) (Invocation, error) {
+	return a.buildInvocation(a.build, profile, workspaces, prompt, a.promptArg)
+}
+
+// InteractiveInvocation returns a validated invocation that launches the
+// provider attached to the controlling terminal for one interactive
+// session, with prompt as the initial message.
+func (a providerAdapter) InteractiveInvocation(profile Profile, workspaces []string, prompt string) (Invocation, error) {
+	if a.interactiveBuild == nil {
+		return Invocation{}, fmt.Errorf("provider %s does not support interactive sessions", a.name)
+	}
+	return a.buildInvocation(a.interactiveBuild, profile, workspaces, prompt, true)
+}
+
+func (a providerAdapter) buildInvocation(build func(Profile, []string, string) Invocation, profile Profile, workspaces []string, prompt string, promptArg bool) (Invocation, error) {
 	if len(workspaces) == 0 {
 		return Invocation{}, fmt.Errorf("provider %s requires at least one Issue Workspace path", a.name)
 	}
 	if err := a.Validate(profile); err != nil {
 		return Invocation{}, err
 	}
-	invocation := a.build(profile, workspaces, prompt)
-	if a.promptArg && len(invocation.Args) > 0 {
+	invocation := build(profile, workspaces, prompt)
+	if promptArg && len(invocation.Args) > 0 {
 		promptIndex := len(invocation.Args) - 1
 		args := append([]string(nil), invocation.Args[:promptIndex]...)
 		args = append(args, profile.ExtraArgs...)
@@ -150,6 +166,18 @@ func codexInvocation(profile Profile, workspaces []string, prompt string) Invoca
 		args = append(args, "-c", `model_reasoning_effort="`+profile.Effort+`"`)
 	}
 	return Invocation{Command: "codex", Args: args, Stdin: prompt}
+}
+
+func codexInteractiveInvocation(profile Profile, workspaces []string, prompt string) Invocation {
+	args := []string{"--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C", workspaces[0]}
+	if profile.Model != "" {
+		args = append(args, "-m", profile.Model)
+	}
+	if profile.Effort != "" {
+		args = append(args, "-c", `model_reasoning_effort="`+profile.Effort+`"`)
+	}
+	args = append(args, prompt)
+	return Invocation{Command: "codex", Args: args}
 }
 
 func claudeInvocation(profile Profile, workspaces []string, prompt string) Invocation {
@@ -172,8 +200,35 @@ func claudeInvocation(profile Profile, workspaces []string, prompt string) Invoc
 	return Invocation{Command: "claude", Args: args, Stdin: prompt}
 }
 
+func claudeInteractiveInvocation(profile Profile, workspaces []string, prompt string) Invocation {
+	args := []string{"--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"}
+	for _, workspace := range workspaces[1:] {
+		args = append(args, "--add-dir", workspace)
+	}
+	if profile.Model != "" {
+		args = append(args, "--model", profile.Model)
+	}
+	if profile.Effort != "" {
+		args = append(args, "--effort", profile.Effort)
+	}
+	args = append(args, prompt)
+	return Invocation{Command: "claude", Args: args}
+}
+
 func opencodeInvocation(profile Profile, workspaces []string, prompt string) Invocation {
 	args := []string{"run", "--dir", workspaces[0], "--dangerously-skip-permissions", "--format", "json"}
+	if profile.Model != "" {
+		args = append(args, "--model", profile.Model)
+	}
+	if profile.Variant != "" {
+		args = append(args, "--variant", profile.Variant)
+	}
+	args = append(args, prompt)
+	return Invocation{Command: "opencode", Args: args}
+}
+
+func opencodeInteractiveInvocation(profile Profile, workspaces []string, prompt string) Invocation {
+	args := []string{"--dir", workspaces[0], "--dangerously-skip-permissions"}
 	if profile.Model != "" {
 		args = append(args, "--model", profile.Model)
 	}
@@ -195,6 +250,18 @@ func kimiInvocation(profile Profile, workspaces []string, prompt string) Invocat
 	return Invocation{Command: "kimi", Args: args, Stdin: prompt}
 }
 
+func kimiInteractiveInvocation(profile Profile, workspaces []string, prompt string) Invocation {
+	args := []string{"--yolo", "--work-dir", workspaces[0]}
+	for _, workspace := range workspaces[1:] {
+		args = append(args, "--add-dir", workspace)
+	}
+	if profile.Model != "" {
+		args = append(args, "--model", profile.Model)
+	}
+	args = append(args, prompt)
+	return Invocation{Command: "kimi", Args: args}
+}
+
 func openclawInvocation(profile Profile, workspaces []string, prompt string) Invocation {
 	args := []string{"run", "--print", "--full-access", "--output-format", "json", "--work-dir", workspaces[0]}
 	for _, workspace := range workspaces[1:] {
@@ -209,8 +276,35 @@ func openclawInvocation(profile Profile, workspaces []string, prompt string) Inv
 	return Invocation{Command: "openclaw", Args: args, Stdin: prompt}
 }
 
+func openclawInteractiveInvocation(profile Profile, workspaces []string, prompt string) Invocation {
+	args := []string{"--full-access", "--work-dir", workspaces[0]}
+	for _, workspace := range workspaces[1:] {
+		args = append(args, "--add-dir", workspace)
+	}
+	if profile.Model != "" {
+		args = append(args, "--model", profile.Model)
+	}
+	if profile.Effort != "" {
+		args = append(args, "--effort", profile.Effort)
+	}
+	args = append(args, prompt)
+	return Invocation{Command: "openclaw", Args: args}
+}
+
 func hermesInvocation(profile Profile, workspaces []string, prompt string) Invocation {
 	args := []string{"run", "--dir", workspaces[0], "--unsafe", "--format", "json"}
+	if profile.Model != "" {
+		args = append(args, "--model", profile.Model)
+	}
+	if profile.Variant != "" {
+		args = append(args, "--variant", profile.Variant)
+	}
+	args = append(args, prompt)
+	return Invocation{Command: "hermes", Args: args}
+}
+
+func hermesInteractiveInvocation(profile Profile, workspaces []string, prompt string) Invocation {
+	args := []string{"--dir", workspaces[0], "--unsafe"}
 	if profile.Model != "" {
 		args = append(args, "--model", profile.Model)
 	}

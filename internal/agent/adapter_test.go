@@ -127,6 +127,56 @@ func TestProviderAdaptersIncludeVerifiedFullPermissionBypassFlags(t *testing.T) 
 	}
 }
 
+func TestProviderAdaptersBuildInteractiveInvocationsWithThePromptAsTheInitialMessage(t *testing.T) {
+	t.Parallel()
+
+	registry := agent.DefaultRegistry()
+	workspaces := []string{"/workspace", "/shared"}
+	tests := []struct {
+		provider string
+		profile  agent.Profile
+		command  string
+		bypass   string
+	}{
+		{provider: "codex", profile: agent.Profile{Model: "gpt-5.4", Effort: "high"}, command: "codex", bypass: "--dangerously-bypass-approvals-and-sandbox"},
+		{provider: "claude", profile: agent.Profile{Model: "sonnet", Effort: "high"}, command: "claude", bypass: "--dangerously-skip-permissions"},
+		{provider: "opencode", profile: agent.Profile{Model: "anthropic/sonnet", Variant: "high"}, command: "opencode", bypass: "--dangerously-skip-permissions"},
+		{provider: "kimi", profile: agent.Profile{Model: "kimi-k2.5"}, command: "kimi", bypass: "--yolo"},
+		{provider: "openclaw", profile: agent.Profile{Model: "gpt-5", Effort: "high"}, command: "openclaw", bypass: "--full-access"},
+		{provider: "hermes", profile: agent.Profile{Model: "hermes-4", Variant: "thinking"}, command: "hermes", bypass: "--unsafe"},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.provider, func(t *testing.T) {
+			adapter, err := registry.Adapter(testCase.provider)
+			if err != nil {
+				t.Fatalf("Adapter() error = %v", err)
+			}
+			invocation, err := adapter.InteractiveInvocation(testCase.profile, workspaces, "let's plan")
+			if err != nil {
+				t.Fatalf("InteractiveInvocation() error = %v", err)
+			}
+			if invocation.Command != testCase.command {
+				t.Errorf("command = %q, want %q", invocation.Command, testCase.command)
+			}
+			if invocation.Stdin != "" {
+				t.Errorf("stdin = %q, want empty for an interactive session", invocation.Stdin)
+			}
+			if len(invocation.Args) == 0 || invocation.Args[len(invocation.Args)-1] != "let's plan" {
+				t.Errorf("args = %#v, want the prompt as the final argument", invocation.Args)
+			}
+			if !slices.Contains(invocation.Args, testCase.bypass) {
+				t.Errorf("args = %#v, want verified full-permission bypass flag %q", invocation.Args, testCase.bypass)
+			}
+			for _, flag := range []string{"--print", "-p", "exec", "run", "--output-format", "--json", "--format"} {
+				if slices.Contains(invocation.Args, flag) {
+					t.Errorf("args = %#v, want no non-interactive flag %q", invocation.Args, flag)
+				}
+			}
+		})
+	}
+}
+
 func TestProviderCapabilitiesRejectUnsupportedSettings(t *testing.T) {
 	t.Parallel()
 
