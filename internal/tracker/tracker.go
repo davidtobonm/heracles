@@ -158,6 +158,22 @@ func ExclusiveScopes(body string) []string {
 	return slices.Compact(scopes)
 }
 
+// ParentPRDURL parses the full Parent PRD GitHub issue URL from an issue body.
+func ParentPRDURL(body string) (string, bool) {
+	inSection := false
+	for _, rawLine := range strings.Split(body, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(line, "## ") {
+			inSection = strings.EqualFold(line, "## Parent PRD")
+			continue
+		}
+		if inSection && line != "" {
+			return line, true
+		}
+	}
+	return "", false
+}
+
 // ReadyIssues returns unblocked AFK Ready Issues in deterministic order.
 func (service *Service) ReadyIssues(ctx context.Context) ([]Issue, error) {
 	issues, err := service.client.ListOpenIssues(ctx, service.repository)

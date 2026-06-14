@@ -328,7 +328,7 @@ func (service Service) progress(ctx context.Context, state State) (State, error)
 			if !result.Exhausted {
 				return state, nil
 			}
-			if err := service.record(ctx, &state, StatusCompleted, "Defined Implementation Stage backlog exhausted"); err != nil {
+			if err := service.record(ctx, &state, StatusCompleted, completionMessage(result)); err != nil {
 				return state, err
 			}
 			return state, nil
@@ -344,4 +344,11 @@ func (service Service) record(ctx context.Context, state *State, status, message
 	state.Status = status
 	state.Events = append(state.Events, Event{Status: status, Message: message, CreatedAt: time.Now().UTC()})
 	return service.Store.Save(ctx, *state)
+}
+
+func completionMessage(result implementation.BacklogResult) string {
+	if len(result.PendingHITL) > 0 {
+		return fmt.Sprintf("Defined Implementation Stage backlog exhausted; %d HITL issue(s) remain for manual completion", len(result.PendingHITL))
+	}
+	return "Defined Implementation Stage backlog exhausted"
 }
