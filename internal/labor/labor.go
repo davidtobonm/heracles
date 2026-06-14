@@ -63,6 +63,15 @@ type State struct {
 	PlanningGate      Gate                         `json:"planning_gate"`
 	IssueGate         Gate                         `json:"issue_gate"`
 	Events            []Event                      `json:"events,omitempty"`
+
+	// SchemaVersion is the Labor-state schema version that wrote this
+	// document, per ADR 0030. A newer binary may resume a Labor only when
+	// it declares this version compatible.
+	SchemaVersion int `json:"schema_version,omitempty"`
+	// HeraclesVersion is the Heracles version that created this Labor.
+	HeraclesVersion string `json:"heracles_version,omitempty"`
+	// UpdatedByVersion is the Heracles version that last ran this Labor.
+	UpdatedByVersion string `json:"updated_by_version,omitempty"`
 }
 
 // Request starts or resumes a Labor.

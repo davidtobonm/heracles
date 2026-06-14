@@ -17,6 +17,7 @@ import (
 
 	"github.com/davidtobonm/heracles/internal/agent"
 	"github.com/davidtobonm/heracles/internal/buildinfo"
+	"github.com/davidtobonm/heracles/internal/cancel"
 	"github.com/davidtobonm/heracles/internal/control"
 	"github.com/davidtobonm/heracles/internal/doctor"
 	"github.com/davidtobonm/heracles/internal/install"
@@ -24,6 +25,7 @@ import (
 	"github.com/davidtobonm/heracles/internal/mcp"
 	"github.com/davidtobonm/heracles/internal/project"
 	"github.com/davidtobonm/heracles/internal/setup"
+	"github.com/davidtobonm/heracles/internal/signal"
 	"github.com/davidtobonm/heracles/internal/tracker"
 	"github.com/davidtobonm/heracles/internal/update"
 	"golang.org/x/term"
@@ -67,6 +69,9 @@ type Options struct {
 	UpdateSource     update.Source
 	UpdateCachePath  string
 	Now              func() time.Time
+	// Notifier delivers interrupt signals for "run", "labor", and "resume",
+	// per ADR 0030. Defaults to signal.OSNotifier{}.
+	Notifier signal.Notifier
 }
 
 // Run executes the Heracles CLI and returns a process exit code.
@@ -320,6 +325,17 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 	if owned {
 		defer surface.Close()
 	}
+	if command == "cancel" && !*yes {
+		confirmed, err := confirm(options, stdout, cancel.Prompt(operation.ID))
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if !confirmed {
+			fmt.Fprintln(stdout, "cancel: cancelled")
+			return 0
+		}
+	}
 	if command == "run" && operation.PRDIssueURL == "" && !*yes {
 		ready, err := surface.Execute(context.Background(), control.Operation{Name: "list", Kind: "ready"})
 		if err != nil {
@@ -340,7 +356,18 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 			return 0
 		}
 	}
-	result, err := surface.Execute(context.Background(), operation)
+	ctx := context.Background()
+	switch command {
+	case "run", "labor", "resume", "retry":
+		notifier := options.Notifier
+		if notifier == nil {
+			notifier = signal.OSNotifier{}
+		}
+		interrupt, stop := signal.Watch(ctx, notifier)
+		defer stop()
+		ctx = signal.WithStopRequested(interrupt.Hard, interrupt.StopRequested)
+	}
+	result, err := surface.Execute(ctx, operation)
 	if err != nil {
 		if *jsonOutput {
 			_ = json.NewEncoder(stdout).Encode(control.Result{Operation: operation.Name, Kind: operation.Kind, ID: operation.ID, Status: "error", Data: map[string]string{"error": err.Error()}})

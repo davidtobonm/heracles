@@ -593,6 +593,46 @@ func TestRunRejectsUnsupportedAndConflictingLaunchOverrides(t *testing.T) {
 	}
 }
 
+func TestCancelRequiresConfirmation(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"cancel", "labor-1"}, &stdout, &stderr, cli.Options{Control: surface, Input: strings.NewReader("n\n")})
+	if exit != 0 {
+		t.Fatalf("cancel exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 0 {
+		t.Errorf("operations = %#v, want no operation executed without confirmation", surface.operations)
+	}
+	if !strings.Contains(stdout.String(), "cancelled") {
+		t.Errorf("stdout = %q, want cancellation message", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exit = cli.RunWithOptions([]string{"cancel", "labor-1"}, &stdout, &stderr, cli.Options{Control: surface, Input: strings.NewReader("y\n")})
+	if exit != 0 {
+		t.Fatalf("cancel exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 1 || surface.operations[0].Name != "cancel" || surface.operations[0].ID != "labor-1" {
+		t.Errorf("operations = %#v, want cancel executed after confirmation", surface.operations)
+	}
+	if !strings.Contains(stdout.String(), "This cannot be undone locally") {
+		t.Errorf("stdout = %q, want irreversibility warning", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exit = cli.RunWithOptions([]string{"cancel", "labor-2", "--yes"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 0 {
+		t.Fatalf("cancel exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 2 || surface.operations[1].Name != "cancel" || surface.operations[1].ID != "labor-2" {
+		t.Errorf("operations = %#v, want --yes to skip confirmation", surface.operations)
+	}
+}
+
 func TestListInspectAndOperationsValidateArguments(t *testing.T) {
 	t.Parallel()
 
@@ -607,7 +647,7 @@ func TestListInspectAndOperationsValidateArguments(t *testing.T) {
 		{args: []string{"inspect", "labor", "labor-1"}, name: "inspect", kind: "labor", id: "labor-1"},
 		{args: []string{"retry", "attempt-1"}, name: "retry", id: "attempt-1"},
 		{args: []string{"resume", "labor-1"}, name: "resume", id: "labor-1"},
-		{args: []string{"cancel", "labor-1", "--reason", "stop"}, name: "cancel", id: "labor-1"},
+		{args: []string{"cancel", "labor-1", "--reason", "stop", "--yes"}, name: "cancel", id: "labor-1"},
 	} {
 		var stdout, stderr bytes.Buffer
 		if exit := cli.RunWithOptions(testCase.args, &stdout, &stderr, cli.Options{Control: surface}); exit != 0 {

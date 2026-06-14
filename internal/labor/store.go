@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/davidtobonm/heracles/internal/buildinfo"
+	"github.com/davidtobonm/heracles/internal/state"
 )
 
 // FileStore persists Labors under a project's .heracles directory.
@@ -17,29 +20,43 @@ func NewFileStore(projectRoot string) FileStore {
 	return FileStore{root: filepath.Join(projectRoot, ".heracles", "labors")}
 }
 
-// Load reads one durable Labor.
+// Load migrates and reads one durable Labor, per ADR 0030.
 func (store FileStore) Load(_ context.Context, id string) (State, error) {
-	contents, err := os.ReadFile(filepath.Join(store.root, filepath.Base(id), "state.json"))
+	path := filepath.Join(store.root, filepath.Base(id), "state.json")
+	if _, err := os.Stat(path); err == nil {
+		if _, err := state.MigrateFile(path); err != nil {
+			return State{}, err
+		}
+	} else if !os.IsNotExist(err) {
+		return State{}, fmt.Errorf("inspect Labor: %w", err)
+	}
+	contents, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return State{}, ErrNotFound
 	}
 	if err != nil {
 		return State{}, fmt.Errorf("read Labor: %w", err)
 	}
-	var state State
-	if err := json.Unmarshal(contents, &state); err != nil {
+	var laborState State
+	if err := json.Unmarshal(contents, &laborState); err != nil {
 		return State{}, fmt.Errorf("decode Labor: %w", err)
 	}
-	return state, nil
+	return laborState, nil
 }
 
-// Save atomically writes one durable Labor.
-func (store FileStore) Save(_ context.Context, state State) error {
-	contents, err := json.MarshalIndent(state, "", "  ")
+// Save atomically writes one durable Labor, recording the Heracles version
+// that created and last ran it, per ADR 0030.
+func (store FileStore) Save(_ context.Context, laborState State) error {
+	if laborState.HeraclesVersion == "" {
+		laborState.HeraclesVersion = buildinfo.Version()
+	}
+	laborState.UpdatedByVersion = buildinfo.Version()
+	laborState.SchemaVersion = state.CurrentSchemaVersion
+	contents, err := json.MarshalIndent(laborState, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode Labor: %w", err)
 	}
-	path := filepath.Join(store.root, filepath.Base(state.ID), "state.json")
+	path := filepath.Join(store.root, filepath.Base(laborState.ID), "state.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create Labor directory: %w", err)
 	}
