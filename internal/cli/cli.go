@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/davidtobonm/heracles/internal/agent"
@@ -155,6 +158,18 @@ func runMCP(args []string, stdout, stderr io.Writer, options Options) int {
 }
 
 func runControl(command string, args []string, stdout, stderr io.Writer, options Options) int {
+	dottedArgs, remaining, err := extractDottedTokens(args)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	for _, assignment := range dottedArgs {
+		if !assignment.HasValue {
+			fmt.Fprintf(stderr, "configuration key %q requires a value (agents.%s.%s=<value>)\n", "agents."+assignment.Role+"."+assignment.Field, assignment.Role, assignment.Field)
+			return 2
+		}
+	}
+
 	flags := flag.NewFlagSet("heracles "+command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "select Project Configuration path")
@@ -163,16 +178,9 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 	problem := flags.String("problem", "", "problem description")
 	prdPath := flags.String("prd", "", "approved PRD path")
 	reason := flags.String("reason", "", "decision or operation reason")
-	implementerProvider := flags.String("implementer", "", "override Implementer provider for this launch")
-	implementerModel := flags.String("implementer-model", "", "override Implementer model for this launch")
-	implementerEffort := flags.String("implementer-effort", "", "override Implementer effort for this launch")
-	implementerVariant := flags.String("implementer-variant", "", "override Implementer variant for this launch")
-	reviewerProvider := flags.String("reviewer", "", "override Reviewer provider for this launch")
-	reviewerModel := flags.String("reviewer-model", "", "override Reviewer model for this launch")
-	reviewerEffort := flags.String("reviewer-effort", "", "override Reviewer effort for this launch")
-	reviewerVariant := flags.String("reviewer-variant", "", "override Reviewer variant for this launch")
+	roleFlags := roleProfileFlags(flags)
 	limit := flags.Int("limit", 0, "attempt at most this many issues during this run")
-	if err := flags.Parse(interspersedFlags(args)); errors.Is(err, flag.ErrHelp) {
+	if err := flags.Parse(interspersedFlags(remaining)); errors.Is(err, flag.ErrHelp) {
 		return 0
 	} else if err != nil {
 		return 2
@@ -234,11 +242,22 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 		return 2
 	}
 
-	overrides := map[string]project.ProfileConfig{
-		"implementer": {Provider: *implementerProvider, Model: *implementerModel, Effort: *implementerEffort, Variant: *implementerVariant},
-		"reviewer":    {Provider: *reviewerProvider, Model: *reviewerModel, Effort: *reviewerEffort, Variant: *reviewerVariant},
+	overrides := make(map[string]project.ProfileConfig, len(agentRoles))
+	for role, profile := range roleFlags {
+		overrides[role] = *profile
+	}
+	if err := mergeDottedIntoProfiles(overrides, dottedArgs); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
 	}
 	overrides = nonEmptyProfiles(overrides)
+	registry := agent.DefaultRegistry()
+	for role, profile := range overrides {
+		if err := validateProfileOverride(registry, profile); err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", role, err)
+			return 2
+		}
+	}
 	surface, owned, err := controlSurface(options, *configPath, overrides)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -279,8 +298,11 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 func interspersedFlags(args []string) []string {
 	valueFlags := map[string]bool{
 		"--config": true, "--id": true, "--problem": true, "--prd": true, "--reason": true, "--limit": true,
-		"--implementer": true, "--implementer-model": true, "--implementer-effort": true, "--implementer-variant": true,
-		"--reviewer": true, "--reviewer-model": true, "--reviewer-effort": true, "--reviewer-variant": true,
+	}
+	for _, role := range agentRoles {
+		for _, suffix := range []string{"", "-model", "-effort", "-variant"} {
+			valueFlags["--"+role+suffix] = true
+		}
 	}
 	var flags []string
 	var positionals []string
@@ -326,39 +348,92 @@ func applyPreferences(loaded *project.LoadedConfig, home string, launch map[stri
 }
 
 func runConfig(args []string, stdout, stderr io.Writer, options Options) int {
-	if len(args) == 0 || (args[0] != "set" && args[0] != "show") {
-		fmt.Fprintln(stderr, "usage: heracles config <set|show> (--global|--project) [Agent Role options]")
+	const usage = "usage: heracles config <show|set|unset|append|path> [--global|-g] [Agent Role options] [agents.<role>.<field>[=value] ...]"
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, usage)
 		return 2
 	}
 	command := args[0]
+	switch command {
+	case "show", "set", "unset", "append", "path":
+	default:
+		fmt.Fprintln(stderr, usage)
+		return 2
+	}
+
+	dottedArgs, remaining, err := extractDottedTokens(args[1:])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+
 	flags := flag.NewFlagSet("heracles config "+command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	global := flags.Bool("global", false, "use global preferences")
-	projectScope := flags.Bool("project", false, "use discovered project preferences")
+	var global bool
+	flags.BoolVar(&global, "global", false, "use global preferences")
+	flags.BoolVar(&global, "g", false, "use global preferences (shorthand)")
+	projectScope := flags.Bool("project", false, "use discovered project preferences (default)")
 	configPath := flags.String("config", "", "select Project Configuration path")
-	implementer := profileFlags(flags, "implementer")
-	reviewer := profileFlags(flags, "reviewer")
-	if err := flags.Parse(args[1:]); errors.Is(err, flag.ErrHelp) {
+	yes := flags.Bool("yes", false, "skip confirmation prompts")
+	var dashed map[string]*project.ProfileConfig
+	if command == "set" {
+		dashed = roleProfileFlags(flags)
+	}
+	if err := flags.Parse(remaining); errors.Is(err, flag.ErrHelp) {
 		return 0
 	} else if err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 || *global == *projectScope {
-		fmt.Fprintln(stderr, "select exactly one of --global or --project")
+	if global && *projectScope {
+		fmt.Fprintln(stderr, "select at most one of --global or --project")
 		return 2
 	}
 
-	path, err := preferencesPath(options, *configPath, *global)
+	path, err := preferencesPath(options, *configPath, global)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+
+	if command == "path" {
+		if flags.NArg() != 0 || len(dottedArgs) != 0 {
+			fmt.Fprintln(stderr, "heracles config path does not accept arguments")
+			return 2
+		}
+		fmt.Fprintln(stdout, path)
+		return 0
+	}
+
 	preferences, err := project.LoadPreferences(path)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if command == "show" {
+
+	if flags.NArg() != 0 {
+		fmt.Fprintf(stderr, "heracles config %s does not accept positional arguments\n", command)
+		return 2
+	}
+
+	switch command {
+	case "show":
+		return runConfigShow(stdout, stderr, preferences, dottedArgs)
+	case "set":
+		return runConfigSet(stdout, stderr, path, preferences, dashed, dottedArgs)
+	case "unset":
+		return runConfigUnset(stdout, stderr, options, path, preferences, dottedArgs, *yes)
+	case "append":
+		return runConfigAppend(stdout, stderr, path, preferences, dottedArgs)
+	}
+	return 0
+}
+
+func runConfigShow(stdout, stderr io.Writer, preferences project.Preferences, dottedArgs []dottedAssignment) int {
+	if len(dottedArgs) > 1 {
+		fmt.Fprintln(stderr, "heracles config show accepts at most one agents.<role>.<field> key")
+		return 2
+	}
+	if len(dottedArgs) == 0 {
 		contents, err := yaml.Marshal(preferences)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -367,12 +442,46 @@ func runConfig(args []string, stdout, stderr io.Writer, options Options) int {
 		fmt.Fprint(stdout, string(contents))
 		return 0
 	}
+	key := dottedArgs[0]
+	if key.HasValue {
+		fmt.Fprintf(stderr, "heracles config show agents.%s.%s does not accept a value\n", key.Role, key.Field)
+		return 2
+	}
+	value, err := profileFieldString(preferences.Agents[key.Role], key.Field)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintln(stdout, value)
+	return 0
+}
 
-	updates := map[string]project.ProfileConfig{"implementer": *implementer, "reviewer": *reviewer}
+func runConfigSet(stdout, stderr io.Writer, path string, preferences project.Preferences, dashed map[string]*project.ProfileConfig, dottedArgs []dottedAssignment) int {
+	updates := make(map[string]project.ProfileConfig, len(agentRoles))
+	for role, profile := range dashed {
+		updates[role] = *profile
+	}
+	for _, assignment := range dottedArgs {
+		if !assignment.HasValue {
+			fmt.Fprintf(stderr, "configuration key %q requires a value (agents.%s.%s=<value>)\n", "agents."+assignment.Role+"."+assignment.Field, assignment.Role, assignment.Field)
+			return 2
+		}
+	}
+	if err := mergeDottedIntoProfiles(updates, dottedArgs); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	updates = nonEmptyProfiles(updates)
 	if len(updates) == 0 {
 		fmt.Fprintln(stderr, "heracles config set requires at least one Agent Role option")
 		return 2
+	}
+	registry := agent.DefaultRegistry()
+	for role, profile := range updates {
+		if err := validateProfileOverride(registry, profile); err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", role, err)
+			return 2
+		}
 	}
 	preferences.Agents = project.MergeRolePreferences(preferences.Agents, updates)
 	if err := project.WritePreferences(path, preferences); err != nil {
@@ -381,6 +490,123 @@ func runConfig(args []string, stdout, stderr io.Writer, options Options) int {
 	}
 	fmt.Fprintf(stdout, "Updated preferences: %s\n", path)
 	return 0
+}
+
+func runConfigUnset(stdout, stderr io.Writer, options Options, path string, preferences project.Preferences, dottedArgs []dottedAssignment, skipConfirm bool) int {
+	if len(dottedArgs) == 0 {
+		fmt.Fprintln(stderr, "heracles config unset requires at least one agents.<role>.<field> key")
+		return 2
+	}
+	keys := make([]string, 0, len(dottedArgs))
+	for _, assignment := range dottedArgs {
+		if assignment.HasValue {
+			fmt.Fprintf(stderr, "heracles config unset agents.%s.%s does not accept a value\n", assignment.Role, assignment.Field)
+			return 2
+		}
+		keys = append(keys, "agents."+assignment.Role+"."+assignment.Field)
+	}
+	if !skipConfirm {
+		confirmed, err := confirm(options, stdout, fmt.Sprintf("Remove %s from %s?", strings.Join(keys, ", "), path))
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if !confirmed {
+			fmt.Fprintln(stdout, "cancelled")
+			return 0
+		}
+	}
+	if preferences.Agents == nil {
+		preferences.Agents = make(map[string]project.ProfileConfig)
+	}
+	for _, assignment := range dottedArgs {
+		profile := preferences.Agents[assignment.Role]
+		if err := unsetProfileField(&profile, assignment.Field); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if profileIsEmpty(profile) {
+			delete(preferences.Agents, assignment.Role)
+		} else {
+			preferences.Agents[assignment.Role] = profile
+		}
+	}
+	if err := project.WritePreferences(path, preferences); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Updated preferences: %s\n", path)
+	return 0
+}
+
+func runConfigAppend(stdout, stderr io.Writer, path string, preferences project.Preferences, dottedArgs []dottedAssignment) int {
+	if len(dottedArgs) == 0 {
+		fmt.Fprintln(stderr, "heracles config append requires at least one agents.<role>.<field>=<value>")
+		return 2
+	}
+	if preferences.Agents == nil {
+		preferences.Agents = make(map[string]project.ProfileConfig)
+	}
+	for _, assignment := range dottedArgs {
+		if !assignment.HasValue {
+			fmt.Fprintf(stderr, "configuration key %q requires a value (agents.%s.%s=<value>)\n", "agents."+assignment.Role+"."+assignment.Field, assignment.Role, assignment.Field)
+			return 2
+		}
+		profile := preferences.Agents[assignment.Role]
+		if err := appendProfileField(&profile, assignment.Field, assignment.Value); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		preferences.Agents[assignment.Role] = profile
+	}
+	if err := project.WritePreferences(path, preferences); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Updated preferences: %s\n", path)
+	return 0
+}
+
+// confirm prompts the user with a yes/no question and reports the answer.
+func confirm(options Options, stdout io.Writer, prompt string) (bool, error) {
+	input := options.Input
+	if input == nil {
+		input = os.Stdin
+	}
+	fmt.Fprintf(stdout, "%s [y/N]: ", prompt)
+	scanner := bufio.NewScanner(input)
+	if !scanner.Scan() {
+		return false, nil
+	}
+	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
+	return answer == "y" || answer == "yes", nil
+}
+
+// profileFieldString renders one field of profile as a string for `heracles config show`.
+func profileFieldString(profile project.ProfileConfig, field string) (string, error) {
+	switch field {
+	case "provider":
+		return profile.Provider, nil
+	case "model":
+		return profile.Model, nil
+	case "effort":
+		return profile.Effort, nil
+	case "variant":
+		return profile.Variant, nil
+	case "timeout":
+		return profile.Timeout, nil
+	case "concurrency":
+		if profile.Concurrency == 0 {
+			return "", nil
+		}
+		return strconv.Itoa(profile.Concurrency), nil
+	case "extra_args":
+		return strings.Join(profile.ExtraArgs, ","), nil
+	case "env_allowlist":
+		return strings.Join(profile.EnvAllowlist, ","), nil
+	default:
+		return "", fmt.Errorf("unsupported configuration field %q", field)
+	}
 }
 
 func profileFlags(flags *flag.FlagSet, role string) *project.ProfileConfig {

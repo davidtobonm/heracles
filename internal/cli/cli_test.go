@@ -140,6 +140,229 @@ func TestConfigSetWritesGlobalAndProjectPreferences(t *testing.T) {
 	}
 }
 
+func TestConfigSupportsAllAgentRolesAndDottedSyntax(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "heracles.yaml"), []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := cli.Options{WorkingDirectory: root, HomeDirectory: home}
+
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{
+		"config", "set", "--project",
+		"--planner", "claude", "--planner-model", "opus", "--planner-effort", "high",
+		"--issue_author", "opencode", "--issue_author-model", "openai/gpt-5.4", "--issue_author-variant", "low",
+		"agents.implementer.provider=codex", "agents.implementer.model=gpt-5.1-codex", "agents.implementer.effort=high",
+	}, &stdout, &stderr, opts)
+	if exit != 0 {
+		t.Fatalf("config set exit = %d; stderr = %q", exit, stderr.String())
+	}
+
+	contents, err := os.ReadFile(filepath.Join(root, ".heracles", "preferences.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"planner:", "provider: claude", "model: opus", "effort: high",
+		"issue_author:", "provider: opencode", "model: openai/gpt-5.4", "variant: low",
+		"implementer:", "provider: codex", "model: gpt-5.1-codex",
+	} {
+		if !strings.Contains(string(contents), want) {
+			t.Errorf("preferences %q missing %q", contents, want)
+		}
+	}
+}
+
+func TestConfigShowPathAppendAndUnset(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "heracles.yaml"), []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := cli.Options{WorkingDirectory: root, HomeDirectory: home}
+
+	var stdout, stderr bytes.Buffer
+	if exit := cli.RunWithOptions([]string{"config", "path", "--project"}, &stdout, &stderr, opts); exit != 0 {
+		t.Fatalf("config path exit = %d; stderr = %q", exit, stderr.String())
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.Join(resolvedRoot, ".heracles", "preferences.yaml")
+	if got := strings.TrimSpace(stdout.String()); got != wantPath {
+		t.Errorf("config path = %q, want %q", got, wantPath)
+	}
+
+	stdout.Reset()
+	if exit := cli.RunWithOptions([]string{"config", "set", "--project", "--implementer", "codex", "agents.implementer.extra_args=--foo,--bar"}, &stdout, &stderr, opts); exit != 0 {
+		t.Fatalf("config set exit = %d; stderr = %q", exit, stderr.String())
+	}
+
+	stdout.Reset()
+	if exit := cli.RunWithOptions([]string{"config", "show", "--project", "agents.implementer.provider"}, &stdout, &stderr, opts); exit != 0 {
+		t.Fatalf("config show exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "codex" {
+		t.Errorf("config show agents.implementer.provider = %q, want codex", got)
+	}
+
+	stdout.Reset()
+	if exit := cli.RunWithOptions([]string{"config", "append", "--project", "agents.implementer.extra_args=--baz"}, &stdout, &stderr, opts); exit != 0 {
+		t.Fatalf("config append exit = %d; stderr = %q", exit, stderr.String())
+	}
+	stdout.Reset()
+	if exit := cli.RunWithOptions([]string{"config", "show", "--project", "agents.implementer.extra_args"}, &stdout, &stderr, opts); exit != 0 {
+		t.Fatalf("config show exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "--foo,--bar,--baz" {
+		t.Errorf("config show agents.implementer.extra_args = %q, want --foo,--bar,--baz", got)
+	}
+
+	stdout.Reset()
+	confirmed := cli.Options{WorkingDirectory: root, HomeDirectory: home, Input: strings.NewReader("y\n")}
+	if exit := cli.RunWithOptions([]string{"config", "unset", "--project", "agents.implementer.provider"}, &stdout, &stderr, confirmed); exit != 0 {
+		t.Fatalf("config unset exit = %d; stderr = %q", exit, stderr.String())
+	}
+	stdout.Reset()
+	if exit := cli.RunWithOptions([]string{"config", "show", "--project", "agents.implementer.provider"}, &stdout, &stderr, opts); exit != 0 {
+		t.Fatalf("config show exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "" {
+		t.Errorf("config show agents.implementer.provider after unset = %q, want empty", got)
+	}
+}
+
+func TestConfigUnsetDeclinedConfirmationMakesNoChanges(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "heracles.yaml"), []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := cli.Options{WorkingDirectory: root, HomeDirectory: home}
+
+	var stdout, stderr bytes.Buffer
+	if exit := cli.RunWithOptions([]string{"config", "set", "--project", "--implementer", "codex"}, &stdout, &stderr, opts); exit != 0 {
+		t.Fatalf("config set exit = %d; stderr = %q", exit, stderr.String())
+	}
+
+	stdout.Reset()
+	declined := cli.Options{WorkingDirectory: root, HomeDirectory: home, Input: strings.NewReader("n\n")}
+	if exit := cli.RunWithOptions([]string{"config", "unset", "--project", "agents.implementer.provider"}, &stdout, &stderr, declined); exit != 0 {
+		t.Fatalf("config unset exit = %d; stderr = %q", exit, stderr.String())
+	}
+
+	stdout.Reset()
+	if exit := cli.RunWithOptions([]string{"config", "show", "--project", "agents.implementer.provider"}, &stdout, &stderr, opts); exit != 0 {
+		t.Fatalf("config show exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "codex" {
+		t.Errorf("config show agents.implementer.provider = %q, want codex (unset declined)", got)
+	}
+}
+
+func TestConfigSetRejectsUnsupportedProviderSettingsAndUnknownProviders(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "heracles.yaml"), []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := cli.Options{WorkingDirectory: root, HomeDirectory: home}
+
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"config", "set", "--project", "--implementer", "claude", "--implementer-variant", "fast"}, &stdout, &stderr, opts)
+	if exit != 2 {
+		t.Fatalf("exit = %d, want 2; stderr = %q", exit, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "variant") {
+		t.Errorf("stderr = %q, want variant validation error", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exit = cli.RunWithOptions([]string{"config", "set", "--project", "--implementer", "not-a-provider"}, &stdout, &stderr, opts)
+	if exit != 2 {
+		t.Fatalf("exit = %d, want 2; stderr = %q", exit, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "unsupported provider") {
+		t.Errorf("stderr = %q, want unsupported provider error", stderr.String())
+	}
+}
+
+func TestConfigSetRejectsConflictingDashedAndDottedValues(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "heracles.yaml"), []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := cli.Options{WorkingDirectory: root, HomeDirectory: home}
+
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"config", "set", "--project", "--implementer", "codex", "agents.implementer.provider=opencode"}, &stdout, &stderr, opts)
+	if exit != 2 {
+		t.Fatalf("exit = %d, want 2; stderr = %q", exit, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "conflicting") {
+		t.Errorf("stderr = %q, want conflicting values error", stderr.String())
+	}
+}
+
+func TestRunAcceptsAllRoleLaunchOverridesAndDottedSyntax(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{
+		"run",
+		"--planner", "claude", "--planner-model", "opus", "--planner-effort", "high",
+		"--issue_author", "opencode", "agents.issue_author.model=openai/gpt-5.4",
+		"--implementer", "codex",
+		"--reviewer", "codex",
+		"--limit", "5",
+	}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 0 {
+		t.Fatalf("run exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 1 || surface.operations[0].Limit != 5 {
+		t.Errorf("operations = %#v, want run limit 5", surface.operations)
+	}
+}
+
+func TestRunRejectsUnsupportedAndConflictingLaunchOverrides(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{"run", "--planner", "claude", "--planner-variant", "fast"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 2 {
+		t.Fatalf("exit = %d, want 2; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 0 {
+		t.Errorf("operations = %#v, want none executed", surface.operations)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exit = cli.RunWithOptions([]string{"run", "--implementer", "codex", "agents.implementer.provider=opencode"}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 2 {
+		t.Fatalf("exit = %d, want 2; stderr = %q", exit, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "conflicting") {
+		t.Errorf("stderr = %q, want conflicting values error", stderr.String())
+	}
+}
+
 func TestListInspectAndOperationsValidateArguments(t *testing.T) {
 	t.Parallel()
 
