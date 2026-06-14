@@ -53,6 +53,18 @@ heracles resume launch-v1
 
 Failed and blocked Issue Workspaces are preserved by default. Retry resumes the preserved issue attempt; resume advances a blocked or interrupted Labor from its latest durable boundary.
 
+## Diagnose And Recover
+
+```sh
+heracles doctor
+heracles doctor --fix
+heracles status
+heracles status launch-v1 --json
+heracles cancel launch-v1 --reason "Superseded"
+```
+
+`heracles doctor` validates the project, Target Repositories, Issue Tracker, Agent Profiles, and MCP/skills availability before a Labor starts; `--fix` repairs missing Tracker labels and the Issue Workspace root. `heracles status` reports every local Labor's stage, backlog progress, blockers, and resumability; `heracles cancel` ends a Labor locally (after confirmation) without touching anything already published to GitHub.
+
 ## Project Topologies
 
 Validated examples live under `examples/`:

@@ -161,7 +161,7 @@ func CheckProject(ctx context.Context, loaded project.LoadedConfig, registry age
 	}
 
 	report.Checks = append(report.Checks, Diagnostic{Name: "MCP", OK: true, Message: "stdio MCP control surface available via `heracles mcp`"})
-	report.Checks = append(report.Checks, Diagnostic{Name: "Skills", OK: true, Message: "shipped skills installation is not yet available"})
+	report.Checks = append(report.Checks, Diagnostic{Name: "Skills", OK: true, Message: "shipped skills available via `heracles skills` and automatic session injection"})
 
 	return report
 }
