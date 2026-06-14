@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/davidtobonm/heracles/internal/ci"
 )
 
 const (
 	StatusOpen    = "open"
+	StatusReview  = "review"
 	StatusMerged  = "merged"
 	StatusBlocked = "blocked"
 )
@@ -63,6 +66,27 @@ type ChangeSet struct {
 	IssueURL     string
 	Status       string
 	PullRequests []PullRequest
+	// Correction describes a retryable delivery failure when Status is
+	// StatusBlocked, per PRD.md's correction-cycle policy. It is nil for
+	// failures that are not retryable through a correction cycle.
+	Correction *Correction
+}
+
+// Correction describes one retryable delivery failure for a single
+// repository's pull request.
+type Correction struct {
+	Repository       string
+	RequestedChanges bool
+	FailedChecks     []ci.Check
+	Classification   ci.Classification
+	Reason           string
+}
+
+// PullRequestStatus is the current merge, review, and CI state of one pull request.
+type PullRequestStatus struct {
+	Merged           bool
+	ChangesRequested bool
+	FailedChecks     []ci.Check
 }
 
 // Client provides pull request and CI operations.
@@ -70,6 +94,7 @@ type Client interface {
 	CreatePullRequest(context.Context, PullRequestInput) (PullRequest, error)
 	UpdatePullRequestBody(context.Context, PullRequest, string) error
 	WaitForCI(context.Context, PullRequest) error
+	Status(context.Context, PullRequest) (PullRequestStatus, error)
 	Merge(context.Context, PullRequest) error
 }
 
@@ -115,18 +140,40 @@ func (service Service) Deliver(ctx context.Context, request Request) (ChangeSet,
 		set.PullRequests[index].Body = linkedBody
 	}
 	if !service.Policy.AutoMerge {
+		set.Status = StatusReview
 		return set, nil
 	}
 
 	for _, name := range mergeOrder(service.Policy.MergeOrder, set.PullRequests) {
 		index := slices.IndexFunc(set.PullRequests, func(pullRequest PullRequest) bool { return pullRequest.Repository == name })
 		pullRequest := set.PullRequests[index]
-		if err := service.Client.WaitForCI(ctx, pullRequest); err != nil {
+		// WaitForCI's error is diagnosed through Status below; a failed
+		// required check surfaces there as a FailedChecks entry rather than
+		// a Go error so it can be classified for a correction cycle.
+		_ = service.Client.WaitForCI(ctx, pullRequest)
+		status, err := service.Client.Status(ctx, pullRequest)
+		if err != nil {
 			set.Status = StatusBlocked
-			return set, fmt.Errorf("wait for %s CI: %w", name, err)
+			set.Correction = &Correction{Repository: name, Classification: ci.Infrastructure, Reason: err.Error()}
+			return set, fmt.Errorf("check %s pull request status: %w", name, err)
+		}
+		if status.Merged {
+			set.PullRequests[index].Merged = true
+			continue
+		}
+		if status.ChangesRequested {
+			set.Status = StatusBlocked
+			set.Correction = &Correction{Repository: name, RequestedChanges: true, Classification: ci.Code, Reason: "reviewer requested changes"}
+			return set, fmt.Errorf("%s pull request has requested changes", name)
+		}
+		if len(status.FailedChecks) > 0 {
+			set.Status = StatusBlocked
+			set.Correction = &Correction{Repository: name, FailedChecks: status.FailedChecks, Classification: ci.Classify(status.FailedChecks), Reason: "required CI checks failed"}
+			return set, fmt.Errorf("%s pull request failed required CI checks", name)
 		}
 		if err := service.Client.Merge(ctx, pullRequest); err != nil {
 			set.Status = StatusBlocked
+			set.Correction = &Correction{Repository: name, Classification: ci.Infrastructure, Reason: err.Error()}
 			return set, fmt.Errorf("partial Change Set merge failed at %s: %w", name, err)
 		}
 		set.PullRequests[index].Merged = true

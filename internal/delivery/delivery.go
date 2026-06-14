@@ -290,6 +290,10 @@ type ReviewContext struct {
 	Evidence     []Evidence
 	Verification []Verification
 	TDDExemption string
+	// Correction describes the prior delivery failure that triggered this
+	// correction cycle, per PRD.md's correction-cycle policy. It is empty
+	// outside of a correction cycle.
+	Correction string
 }
 
 // ReviewOutcome is the structured result of a Reviewer pass.
@@ -342,9 +346,16 @@ TDD Exemption: %s
 
 ## Verification
 %s
-
+%s
 Check correctness and complete issue/PRD compliance. Reject unnecessary scope and premature abstractions (YAGNI), and reject meaningful duplication (DRY). Make corrective changes directly when appropriate, then rerun affected verification and report the verified result.
-`, context.Issue, context.PRD, context.Changes, pretty(context.Evidence), context.TDDExemption, pretty(context.Verification))
+`, context.Issue, context.PRD, context.Changes, pretty(context.Evidence), context.TDDExemption, pretty(context.Verification), correctionSection(context.Correction))
+}
+
+func correctionSection(correction string) string {
+	if correction == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n## Correction Cycle\nThe previous delivery attempt failed. Resolve this before reporting completion:\n%s\n", correction)
 }
 
 func pretty(value any) string {

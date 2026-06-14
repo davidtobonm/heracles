@@ -8,8 +8,11 @@ import (
 	"time"
 
 	"github.com/davidtobonm/heracles/internal/changeset"
+	"github.com/davidtobonm/heracles/internal/ci"
+	"github.com/davidtobonm/heracles/internal/correction"
 	"github.com/davidtobonm/heracles/internal/delivery"
 	"github.com/davidtobonm/heracles/internal/implementation"
+	"github.com/davidtobonm/heracles/internal/review"
 	"github.com/davidtobonm/heracles/internal/tracker"
 	"github.com/davidtobonm/heracles/internal/workspace"
 )
@@ -119,6 +122,128 @@ func TestImplementationBlocksInvalidEvidenceBeforeReview(t *testing.T) {
 	}
 }
 
+func TestImplementationPausesForManualReviewAndResumesOnMerge(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture()
+	fixture.deliverer.statuses = []string{changeset.StatusReview}
+	state, err := fixture.service.Run(context.Background(), request())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if state.Status != implementation.StatusAwaitingReview {
+		t.Fatalf("state = %#v, want awaiting review", state)
+	}
+	if !strings.Contains(strings.Join(fixture.calls, ","), "review") {
+		t.Errorf("calls = %#v, want issue marked for review", fixture.calls)
+	}
+
+	fixture.calls = nil
+	fixture.reconciler.merged = false
+	state, err = fixture.service.Run(context.Background(), implementation.Request{AttemptID: request().AttemptID})
+	if err != nil {
+		t.Fatalf("Run(resume) error = %v", err)
+	}
+	if state.Status != implementation.StatusAwaitingReview {
+		t.Errorf("state = %#v, want still awaiting review", state)
+	}
+	if strings.Join(fixture.calls, ",") != "reconcile" {
+		t.Errorf("calls = %#v, want only reconciliation while awaiting review", fixture.calls)
+	}
+
+	fixture.calls = nil
+	fixture.reconciler.merged = true
+	state, err = fixture.service.Run(context.Background(), implementation.Request{AttemptID: request().AttemptID})
+	if err != nil {
+		t.Fatalf("Run(resume) error = %v", err)
+	}
+	if state.Status != implementation.StatusCompleted {
+		t.Errorf("state = %#v, want completed once the pull request merges", state)
+	}
+}
+
+func TestImplementationRetriesCorrectionCycleAfterRequestedChanges(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture()
+	fixture.deliverer.statuses = []string{changeset.StatusBlocked, changeset.StatusMerged}
+	fixture.deliverer.corrections = []*changeset.Correction{
+		{Repository: "backend", RequestedChanges: true, Classification: ci.Code, Reason: "reviewer requested changes"},
+	}
+	state, err := fixture.service.Run(context.Background(), request())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if state.Status != implementation.StatusCompleted {
+		t.Fatalf("state = %#v, want completed after correction cycle", state)
+	}
+	if state.CorrectionCycles != 1 {
+		t.Errorf("CorrectionCycles = %d, want 1", state.CorrectionCycles)
+	}
+	if strings.Count(strings.Join(fixture.calls, ","), "implement") != 2 || strings.Count(strings.Join(fixture.calls, ","), "deliver") != 2 {
+		t.Errorf("calls = %#v, want a rerun of implementation and delivery", fixture.calls)
+	}
+}
+
+func TestImplementationBlocksAfterCorrectionCyclesExhausted(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture()
+	fixture.deliverer.statuses = []string{changeset.StatusBlocked, changeset.StatusBlocked}
+	fixture.deliverer.corrections = []*changeset.Correction{
+		{Repository: "backend", FailedChecks: []ci.Check{{Name: "test", Status: "completed", Conclusion: "failure"}}, Classification: ci.Code, Reason: "required CI checks failed"},
+		{Repository: "backend", FailedChecks: []ci.Check{{Name: "test", Status: "completed", Conclusion: "failure"}}, Classification: ci.Code, Reason: "required CI checks failed"},
+	}
+	fixture.service.CorrectionPolicy = correction.Policy{MaxCycles: 1}
+	state, err := fixture.service.Run(context.Background(), request())
+	if err == nil || state.Status != implementation.StatusBlocked {
+		t.Fatalf("Run() = %#v, %v; want blocked once correction cycles are exhausted", state, err)
+	}
+	if state.CorrectionCycles != 1 {
+		t.Errorf("CorrectionCycles = %d, want 1", state.CorrectionCycles)
+	}
+}
+
+func TestImplementationRetryUntilPassNeverBlocks(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture()
+	correctionContext := &changeset.Correction{Repository: "backend", Classification: ci.Code, Reason: "required CI checks failed"}
+	fixture.deliverer.statuses = []string{changeset.StatusBlocked, changeset.StatusBlocked, changeset.StatusBlocked, changeset.StatusMerged}
+	fixture.deliverer.corrections = []*changeset.Correction{correctionContext, correctionContext, correctionContext}
+	fixture.service.CorrectionPolicy = correction.Policy{MaxCycles: 1}
+	current := request()
+	current.RetryUntilPass = true
+	state, err := fixture.service.Run(context.Background(), current)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if state.Status != implementation.StatusCompleted {
+		t.Fatalf("state = %#v, want completed despite exceeding configured cycles", state)
+	}
+	if state.CorrectionCycles != 3 {
+		t.Errorf("CorrectionCycles = %d, want 3", state.CorrectionCycles)
+	}
+}
+
+type fakeReviewReconciler struct {
+	calls  *[]string
+	merged bool
+	err    error
+}
+
+func (value *fakeReviewReconciler) Reconcile(_ context.Context, set changeset.ChangeSet) (review.Outcome, error) {
+	*value.calls = append(*value.calls, "reconcile")
+	if value.err != nil {
+		return review.Outcome{}, value.err
+	}
+	pullRequests := append([]changeset.PullRequest(nil), set.PullRequests...)
+	for index := range pullRequests {
+		pullRequests[index].Merged = value.merged
+	}
+	return review.Outcome{Merged: value.merged, PullRequests: pullRequests}, nil
+}
+
 func request() implementation.Request {
 	reference, _ := tracker.ParseReference("https://github.com/acme/backlog/issues/7")
 	return implementation.Request{
@@ -140,6 +265,7 @@ type fixture struct {
 	reviewer    *fakeReviewer
 	verifier    *fakeVerifier
 	deliverer   *fakeDeliverer
+	reconciler  *fakeReviewReconciler
 	service     implementation.Service
 }
 
@@ -160,9 +286,11 @@ func newFixture() *fixture {
 	fixture.reviewer = &fakeReviewer{calls: &fixture.calls, outcome: delivery.ReviewOutcome{Status: "completed", Summary: "Looks good"}}
 	fixture.verifier = &fakeVerifier{calls: &fixture.calls, results: []delivery.Verification{{Repository: "backend", Command: "go test", Execution: delivery.Execution{ExitCode: 0}}}}
 	fixture.deliverer = &fakeDeliverer{calls: &fixture.calls}
+	fixture.reconciler = &fakeReviewReconciler{calls: &fixture.calls}
 	fixture.service = implementation.Service{
 		Store: fixture.store, Tracker: fixture.tracker, Workspaces: fixture.workspace, Implementer: fixture.implementer,
-		Reviewer: fixture.reviewer, Verifier: fixture.verifier, Deliverer: fixture.deliverer,
+		Reviewer: fixture.reviewer, Verifier: fixture.verifier, Deliverer: fixture.deliverer, ReviewReconciler: fixture.reconciler,
+		Sleep: func(time.Duration) {},
 	}
 	return fixture
 }
@@ -192,6 +320,10 @@ func (value *fakeTracker) Complete(context.Context, tracker.Reference, string) e
 }
 func (value *fakeTracker) Retry(context.Context, tracker.Reference, string) error {
 	*value.calls = append(*value.calls, "retry")
+	return nil
+}
+func (value *fakeTracker) Review(context.Context, tracker.Reference, string) error {
+	*value.calls = append(*value.calls, "review")
 	return nil
 }
 
@@ -243,7 +375,13 @@ func (value *fakeVerifier) Verify(context.Context, workspace.Workspace, []string
 	return value.results, nil
 }
 
-type fakeDeliverer struct{ calls *[]string }
+type fakeDeliverer struct {
+	calls *[]string
+	// status is returned for every Deliver call once attempts reaches len(statuses)-1.
+	statuses    []string
+	corrections []*changeset.Correction
+	attempts    int
+}
 
 func (value *fakeDeliverer) Deliver(_ context.Context, request changeset.Request) (changeset.ChangeSet, error) {
 	*value.calls = append(*value.calls, "deliver")
@@ -253,5 +391,24 @@ func (value *fakeDeliverer) Deliver(_ context.Context, request changeset.Request
 			pullRequests = append(pullRequests, changeset.PullRequest{Repository: repository.Name, URL: "https://github.com/" + repository.GitHub + "/pull/1"})
 		}
 	}
-	return changeset.ChangeSet{ID: request.ID, IssueURL: request.IssueURL, Status: changeset.StatusOpen, PullRequests: pullRequests}, nil
+	status := changeset.StatusMerged
+	var correction *changeset.Correction
+	index := value.attempts
+	if index < len(value.statuses) {
+		status = value.statuses[index]
+	}
+	if index < len(value.corrections) {
+		correction = value.corrections[index]
+	}
+	value.attempts++
+	if status == changeset.StatusMerged {
+		for index := range pullRequests {
+			pullRequests[index].Merged = true
+		}
+	}
+	set := changeset.ChangeSet{ID: request.ID, IssueURL: request.IssueURL, Status: status, PullRequests: pullRequests, Correction: correction}
+	if status == changeset.StatusBlocked {
+		return set, errors.New("Change Set delivery blocked")
+	}
+	return set, nil
 }

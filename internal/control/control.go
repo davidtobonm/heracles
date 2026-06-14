@@ -19,6 +19,9 @@ type Operation struct {
 	Limit        int      `json:"limit,omitempty"`
 	Tracker      string   `json:"tracker,omitempty"`
 	Repositories []string `json:"repositories,omitempty"`
+	// RetryUntilPass permits unbounded correction cycles for trusted,
+	// unattended launches, per PRD.md's correction-cycle policy.
+	RetryUntilPass bool `json:"retry_until_pass,omitempty"`
 }
 
 // Result is one stable machine-readable Control Surface outcome.

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/davidtobonm/heracles/internal/changeset"
+	"github.com/davidtobonm/heracles/internal/ci"
 )
 
 func TestDeliverCreatesLinkedPRsForTouchedRepositoriesWithoutAutoMerge(t *testing.T) {
@@ -27,6 +28,9 @@ func TestDeliverCreatesLinkedPRsForTouchedRepositoriesWithoutAutoMerge(t *testin
 	}
 	if len(set.PullRequests) != 2 || len(client.created) != 2 || len(client.merged) != 0 {
 		t.Errorf("Change Set = %#v, want two open PRs and no automatic merge", set)
+	}
+	if set.Status != changeset.StatusReview {
+		t.Errorf("status = %q, want %q for a Change Set awaiting manual review", set.Status, changeset.StatusReview)
 	}
 	for _, body := range client.updatedBodies {
 		for _, expected := range []string{"## Review Summary", "## QA", "## Evidence", "## Related Pull Requests", "acme/backend", "acme/shared"} {
@@ -61,6 +65,72 @@ func TestOrderedAutoMergeBlocksHonestlyAfterPartialFailure(t *testing.T) {
 	}
 }
 
+func TestDeliverBlocksWithCorrectionOnRequestedChanges(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{statusFor: map[string]changeset.PullRequestStatus{
+		"backend": {ChangesRequested: true},
+	}}
+	set, err := (changeset.Service{Client: client, Policy: changeset.Policy{AutoMerge: true}}).Deliver(context.Background(), changeset.Request{
+		ID:       "change-1",
+		IssueURL: "https://github.com/acme/backlog/issues/7",
+		Repositories: []changeset.Repository{
+			{Name: "backend", GitHub: "acme/backend", Touched: true, Verified: true},
+		},
+	})
+	if err == nil || set.Status != changeset.StatusBlocked {
+		t.Fatalf("Deliver() = %#v, %v; want blocked on requested changes", set, err)
+	}
+	if set.Correction == nil || !set.Correction.RequestedChanges || set.Correction.Classification != ci.Code {
+		t.Errorf("Correction = %#v, want requested changes classified as code", set.Correction)
+	}
+	if len(client.merged) != 0 {
+		t.Errorf("merged repositories = %#v, want none while changes are requested", client.merged)
+	}
+}
+
+func TestDeliverBlocksWithCorrectionOnFailedRequiredChecks(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{statusFor: map[string]changeset.PullRequestStatus{
+		"backend": {FailedChecks: []ci.Check{{Name: "test", Status: "completed", Conclusion: "failure"}}},
+	}}
+	set, err := (changeset.Service{Client: client, Policy: changeset.Policy{AutoMerge: true}}).Deliver(context.Background(), changeset.Request{
+		ID:       "change-1",
+		IssueURL: "https://github.com/acme/backlog/issues/7",
+		Repositories: []changeset.Repository{
+			{Name: "backend", GitHub: "acme/backend", Touched: true, Verified: true},
+		},
+	})
+	if err == nil || set.Status != changeset.StatusBlocked {
+		t.Fatalf("Deliver() = %#v, %v; want blocked on failed required checks", set, err)
+	}
+	if set.Correction == nil || set.Correction.Classification != ci.Code {
+		t.Errorf("Correction = %#v, want failed test classified as code", set.Correction)
+	}
+}
+
+func TestDeliverBlocksWithInfrastructureCorrectionOnFailedRequiredChecks(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{statusFor: map[string]changeset.PullRequestStatus{
+		"backend": {FailedChecks: []ci.Check{{Name: "build", Status: "completed", Conclusion: "cancelled"}}},
+	}}
+	set, err := (changeset.Service{Client: client, Policy: changeset.Policy{AutoMerge: true}}).Deliver(context.Background(), changeset.Request{
+		ID:       "change-1",
+		IssueURL: "https://github.com/acme/backlog/issues/7",
+		Repositories: []changeset.Repository{
+			{Name: "backend", GitHub: "acme/backend", Touched: true, Verified: true},
+		},
+	})
+	if err == nil || set.Status != changeset.StatusBlocked {
+		t.Fatalf("Deliver() = %#v, %v; want blocked on failed required checks", set, err)
+	}
+	if set.Correction == nil || set.Correction.Classification != ci.Infrastructure {
+		t.Errorf("Correction = %#v, want cancelled check classified as infrastructure", set.Correction)
+	}
+}
+
 func TestDeliverRejectsUnverifiedTouchedRepository(t *testing.T) {
 	t.Parallel()
 
@@ -86,6 +156,7 @@ type fakeClient struct {
 	waited        []string
 	merged        []string
 	mergeFailure  string
+	statusFor     map[string]changeset.PullRequestStatus
 }
 
 func (client *fakeClient) CreatePullRequest(_ context.Context, input changeset.PullRequestInput) (changeset.PullRequest, error) {
@@ -99,6 +170,12 @@ func (client *fakeClient) UpdatePullRequestBody(_ context.Context, pullRequest c
 func (client *fakeClient) WaitForCI(_ context.Context, pullRequest changeset.PullRequest) error {
 	client.waited = append(client.waited, pullRequest.Repository)
 	return nil
+}
+func (client *fakeClient) Status(_ context.Context, pullRequest changeset.PullRequest) (changeset.PullRequestStatus, error) {
+	if status, ok := client.statusFor[pullRequest.Repository]; ok {
+		return status, nil
+	}
+	return changeset.PullRequestStatus{}, nil
 }
 func (client *fakeClient) Merge(_ context.Context, pullRequest changeset.PullRequest) error {
 	if pullRequest.Repository == client.mergeFailure {

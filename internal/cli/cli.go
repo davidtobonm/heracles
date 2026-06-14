@@ -181,13 +181,14 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 	reason := flags.String("reason", "", "decision or operation reason")
 	roleFlags := roleProfileFlags(flags)
 	limit := flags.Int("limit", 0, "attempt at most this many issues during this run")
+	retryUntilPass := flags.Bool("retry-until-pass", false, "retry correction cycles without limit for trusted, unattended launches")
 	if err := flags.Parse(interspersedFlags(remaining)); errors.Is(err, flag.ErrHelp) {
 		return 0
 	} else if err != nil {
 		return 2
 	}
 
-	operation := control.Operation{Name: command, ID: *id, Problem: *problem, Reason: *reason, Limit: *limit}
+	operation := control.Operation{Name: command, ID: *id, Problem: *problem, Reason: *reason, Limit: *limit, RetryUntilPass: *retryUntilPass}
 	if operation.Limit < 0 {
 		fmt.Fprintln(stderr, "--limit must be positive")
 		return 2

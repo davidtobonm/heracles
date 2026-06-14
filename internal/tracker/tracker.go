@@ -17,6 +17,7 @@ const (
 	LabelReady          = "heracles:ready"
 	LabelBlocked        = "heracles:blocked"
 	LabelInProgress     = "heracles:in-progress"
+	LabelReview         = "heracles:review"
 	LabelDone           = "heracles:done"
 	LabelHITL           = "heracles:hitl"
 	LabelTDDExempt      = "heracles:tdd-exempt"
@@ -256,6 +257,12 @@ func (service *Service) Retry(ctx context.Context, reference Reference, laborID 
 	return service.transition(ctx, reference, LabelInProgress, fmt.Sprintf("Retried by Heracles Labor `%s`.", laborID))
 }
 
+// Review marks an issue as awaiting manual pull request review and publishes
+// a shared comment, per the auto-merge-disabled delivery policy in ADR 0003.
+func (service *Service) Review(ctx context.Context, reference Reference, reason string) error {
+	return service.transition(ctx, reference, LabelReview, "Awaiting review by Heracles: "+reason)
+}
+
 func (service *Service) transition(ctx context.Context, reference Reference, label, comment string) error {
 	issue, err := service.client.Issue(ctx, reference)
 	if err != nil {
@@ -270,13 +277,13 @@ func (service *Service) transition(ctx context.Context, reference Reference, lab
 func isReady(issue Issue) bool {
 	return issue.State == StateOpen &&
 		hasLabel(issue.Labels, LabelReady) &&
-		!hasAnyLabel(issue.Labels, LabelBlocked, LabelInProgress, LabelDone, LabelHITL)
+		!hasAnyLabel(issue.Labels, LabelBlocked, LabelInProgress, LabelReview, LabelDone, LabelHITL)
 }
 
 func withState(labels []string, state string) []string {
 	result := make([]string, 0, len(labels)+1)
 	for _, label := range labels {
-		if !hasAnyLabel([]string{label}, LabelReady, LabelBlocked, LabelInProgress, LabelDone, LabelHITL) {
+		if !hasAnyLabel([]string{label}, LabelReady, LabelBlocked, LabelInProgress, LabelReview, LabelDone, LabelHITL) {
 			result = append(result, label)
 		}
 	}

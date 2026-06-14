@@ -51,8 +51,8 @@ func TestInitializeDetectsContainingGitHubRepository(t *testing.T) {
 	if result.Config.Agents.DefaultProfile != "default" || result.Config.Agents.Profiles["default"].Provider != "codex" {
 		t.Errorf("agents = %#v, want usable default Agent Profile", result.Config.Agents)
 	}
-	if result.Config.Delivery.AutoMerge {
-		t.Errorf("delivery = %#v, want automatic merging disabled by default", result.Config.Delivery)
+	if !result.Config.Delivery.AutoMerge {
+		t.Errorf("delivery = %#v, want automatic merging enabled by default", result.Config.Delivery)
 	}
 	if result.Config.Planning.QuestionBudget != 20 {
 		t.Errorf("planning = %#v, want default Question Budget 20", result.Config.Planning)
