@@ -130,6 +130,40 @@ func TestLaborResumesIssuePublicationAfterCommittedApproval(t *testing.T) {
 	}
 }
 
+func TestLaborCancelIsIrreversibleAndDoesNotTouchOtherStages(t *testing.T) {
+	t.Parallel()
+
+	fixture := newFixture()
+	if _, err := fixture.service.Run(context.Background(), request()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	state, err := fixture.service.Cancel(context.Background(), "labor-1", "no longer needed")
+	if err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+	if state.Status != labor.StatusCancelled {
+		t.Fatalf("state.Status = %q, want cancelled", state.Status)
+	}
+	if fixture.planning.runs != 1 || fixture.issues.publishes != 0 || fixture.implementation.runs != 0 {
+		t.Errorf("Cancel() invoked other stages: planning runs = %d, issue publishes = %d, implementation runs = %d", fixture.planning.runs, fixture.issues.publishes, fixture.implementation.runs)
+	}
+
+	if _, err := fixture.service.Cancel(context.Background(), "labor-1", "again"); err == nil {
+		t.Error("Cancel() on an already-cancelled Labor succeeded, want an error")
+	}
+	if _, err := fixture.service.Resume(context.Background(), "labor-1"); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	resumed, err := fixture.store.Load(context.Background(), "labor-1")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if resumed.Status != labor.StatusCancelled {
+		t.Errorf("status after Resume = %q, want cancellation to remain irreversible", resumed.Status)
+	}
+}
+
 func request() labor.Request {
 	return labor.Request{
 		ID: "labor-1", Problem: "Build the product", TrackerRepository: "acme/backlog",

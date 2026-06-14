@@ -94,6 +94,21 @@ func TestBacklogRunnerStopsAtRunLimit(t *testing.T) {
 	}
 }
 
+func TestBacklogRunnerStopsAtDurableBoundaryOnInterrupt(t *testing.T) {
+	t.Parallel()
+
+	source := &fakeSource{rounds: [][]tracker.Issue{{backlogIssue(1), backlogIssue(2)}, {backlogIssue(3)}}}
+	executor := &backlogExecutor{}
+	stopRequested := func() bool { return len(executor.keys) > 0 }
+	result, err := (implementation.BacklogRunner{Source: source, Scheduler: scheduler.Scheduler{}, Executor: executor, StopRequested: stopRequested}).Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Exhausted || len(result.Completed) != 2 || len(executor.keys) != 2 {
+		t.Errorf("result/executor = %#v / %#v, want one batch attempted and a resumable result", result, executor.keys)
+	}
+}
+
 func backlogIssue(number int) tracker.Issue {
 	reference, _ := tracker.ParseReference("https://github.com/acme/backlog/issues/" + string(rune('0'+number)))
 	return tracker.Issue{Reference: reference, URL: reference.URL(), Body: "## Exclusive Scopes\n- api-" + string(rune('0'+number))}

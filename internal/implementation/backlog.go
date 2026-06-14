@@ -29,6 +29,10 @@ type BacklogRunner struct {
 	// PRDURL scopes the backlog to one Parent PRD's issues, per
 	// `heracles run <prd-url>`. Empty processes every eligible issue.
 	PRDURL string
+	// StopRequested reports a graceful interrupt. When it returns true,
+	// Run stops between batches at the next durable boundary and returns a
+	// resumable, non-exhausted result, per ADR 0030.
+	StopRequested func() bool
 }
 
 // BacklogResult is the terminal defined-backlog outcome.
@@ -47,6 +51,9 @@ func (runner BacklogRunner) Run(ctx context.Context) (BacklogResult, error) {
 	}
 	var result BacklogResult
 	for {
+		if runner.StopRequested != nil && runner.StopRequested() {
+			return result, nil
+		}
 		ready, err := runner.Source.ReadyIssues(ctx)
 		if err != nil {
 			return result, err

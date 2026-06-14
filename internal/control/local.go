@@ -25,6 +25,7 @@ import (
 	"github.com/davidtobonm/heracles/internal/project"
 	"github.com/davidtobonm/heracles/internal/review"
 	"github.com/davidtobonm/heracles/internal/scheduler"
+	"github.com/davidtobonm/heracles/internal/signal"
 	"github.com/davidtobonm/heracles/internal/tracker"
 	"github.com/davidtobonm/heracles/internal/workspace"
 )
@@ -190,7 +191,7 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 		if report, err := local.preflight(ctx); err != nil {
 			return result(operation, "blocked", report), err
 		}
-		backlog := local.backlog("implementation-direct", "", operation.RetryUntilPass)
+		backlog := local.backlog(ctx, "implementation-direct", "", operation.RetryUntilPass)
 		backlog.Limit = operation.Limit
 		backlog.PRDURL = operation.PRDIssueURL
 		value, err := backlog.Run(ctx)
@@ -210,7 +211,7 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 		} else if !errors.Is(err, labor.ErrNotFound) {
 			return Result{}, err
 		}
-		state, err := local.labor(operation.ID).Run(ctx, labor.Request{
+		state, err := local.labor(ctx, operation.ID).Run(ctx, labor.Request{
 			ID: operation.ID, Problem: operation.Problem, TrackerRepository: local.trackerRepository(), Repositories: local.repositoryContexts(),
 		})
 		return result(operation, state.Status, state), err
@@ -220,10 +221,10 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 		if report, err := local.preflight(ctx); err != nil {
 			return result(operation, "blocked", report), err
 		}
-		state, err := local.labor(operation.ID).Resume(ctx, operation.ID)
+		state, err := local.labor(ctx, operation.ID).Resume(ctx, operation.ID)
 		return result(operation, state.Status, state), err
 	case "cancel":
-		state, err := local.labor(operation.ID).Cancel(ctx, operation.ID, operation.Reason)
+		state, err := local.labor(ctx, operation.ID).Cancel(ctx, operation.ID, operation.Reason)
 		return result(operation, state.Status, state), err
 	case "retry":
 		service, err := local.implementationForAttempt(ctx, operation.ID)
@@ -255,9 +256,9 @@ func (local *Local) decide(ctx context.Context, operation Operation) (Result, er
 	if _, err := laborStore.Load(ctx, operation.ID); err == nil {
 		var state labor.State
 		if operation.Kind == "planning" {
-			state, err = local.labor(operation.ID).DecidePlanning(ctx, operation.ID, decision, operation.Reason)
+			state, err = local.labor(ctx, operation.ID).DecidePlanning(ctx, operation.ID, decision, operation.Reason)
 		} else {
-			state, err = local.labor(operation.ID).DecideIssues(ctx, operation.ID, decision, operation.Reason)
+			state, err = local.labor(ctx, operation.ID).DecideIssues(ctx, operation.ID, decision, operation.Reason)
 		}
 		return result(operation, state.Status, state), err
 	}
@@ -288,20 +289,21 @@ func (local *Local) preflight(ctx context.Context) (doctor.Report, error) {
 	return report, nil
 }
 
-func (local *Local) labor(id string) labor.Service {
+func (local *Local) labor(ctx context.Context, id string) labor.Service {
 	prd := ""
-	if state, err := labor.NewFileStore(local.root).Load(context.Background(), id); err == nil {
+	if state, err := labor.NewFileStore(local.root).Load(ctx, id); err == nil {
 		prd = state.Planning.PRD
 	}
 	return labor.Service{
-		Store: labor.NewHistoryStore(local.root, local.history), Planning: local.planning, Issues: local.issues, Implementation: local.backlog(id, prd, false),
+		Store: labor.NewHistoryStore(local.root, local.history), Planning: local.planning, Issues: local.issues, Implementation: local.backlog(ctx, id, prd, false),
 	}
 }
 
-func (local *Local) backlog(laborID, prd string, retryUntilPass bool) implementation.BacklogRunner {
+func (local *Local) backlog(ctx context.Context, laborID, prd string, retryUntilPass bool) implementation.BacklogRunner {
 	return implementation.BacklogRunner{
 		Source:    resumableBacklogSource{Source: local.tracker, History: local.history, LaborID: laborID},
 		Scheduler: local.scheduler, Executor: &attemptExecutor{local: local, laborID: laborID, prd: prd, retryUntilPass: retryUntilPass}, Profile: local.profile,
+		StopRequested: func() bool { return signal.StopRequested(ctx) },
 	}
 }
 
