@@ -75,6 +75,8 @@ heracles init \
 
 Repository paths passed as relative paths are stored relative to `heracles.yaml`; absolute paths remain absolute. Project Configuration discovery searches upward from the current directory, and later commands can select a configuration explicitly with `--config`.
 
+Running `heracles init` with none of `--tracker`, `--repo`, or other configuration flags launches an interactive setup wizard instead. For a new project it offers **Fast Setup** (an Implementer profile with sensible defaults) or **Complete Setup** (configure every Agent Role, Labor and delivery policy, and per-repository verification commands). Run against an existing `heracles.yaml`, it offers **Fast Reconfigure**, **Complete Reconfigure**, **Repair Missing Values** (fills in only what is absent without touching existing settings), or **Cancel**.
+
 ## Local Execution History
 
 Heracles stores authoritative local workflow state in `.heracles/history.db`. Human-readable JSONL logs live under `.heracles/logs/`, and evidence artifacts live under `.heracles/artifacts/`. Reopening a project rebuilds JSONL mirrors from committed SQLite events, so interrupted workflows remain inspectable and resumable.
@@ -102,9 +104,28 @@ agents:
     reviewer: reviewer
 ```
 
-Heracles supports Codex, Claude Code, OpenCode, and Kimi Code. Provider-specific model, effort, and variant settings are validated instead of silently ignored. Run `heracles doctor` before a Labor to validate the Project Configuration, Target Repositories, GitHub authentication, Agent Profiles, capabilities, and required executables. Diagnostics never invoke a paid agent session.
+Heracles supports Codex, Claude Code, OpenCode, Kimi Code, OpenClaw, and Hermes. Provider-specific model, effort, and variant settings are validated instead of silently ignored.
+
+### Environment And Secrets
+
+A launched provider or verification command only receives a fixed set of essential process variables (`HOME`, `PATH`, `LANG`, `SHELL`, `TERM`, and similar) plus whatever an Agent Profile's `env_allowlist` adds, such as `CI_TOKEN` above. Repository-level `verify_env` works the same way for verification commands. If a required verification environment variable is missing, `heracles doctor` reports it as a blocking finding before any work starts. Values that look like secrets (API keys, tokens, credentials referenced by an allowlisted variable) are scrubbed to `***REDACTED***` before they appear in CLI output, logs under `.heracles/logs/`, or Execution History — Heracles never persists or displays the underlying value.
+
+Each provider's adapter launches with its verified full-permission bypass flags so unattended Agent Roles never stop for interactive tool approval. Before the first Labor that launches a given provider, Heracles shows a one-time disclosure ("Heracles will launch `<provider>` with its verified full-permission bypass, granting unattended access to your shell and Target Repositories for this Labor. Continue?") and records the acknowledgement per project; later Labors using an already-acknowledged provider proceed without re-prompting.
 
 See [Provider Capabilities](docs/providers.md) for the exact capability matrix and official CLI references. Validated topology examples live under [`examples/`](examples/).
+
+### Doctor
+
+Run `heracles doctor` before a Labor to validate the project. Diagnostics never invoke a paid agent session or authenticate a provider. It checks:
+
+- the `git` and `gh` executables and GitHub authentication
+- access to the configured Issue Tracker and the presence of every required shared-state label (`heracles:ready`, `heracles:blocked`, `heracles:in-progress`, `heracles:review`, `heracles:done`, `heracles:hitl`, `heracles:tdd-exempt`, `heracles:implementation`, `heracles:obsolete`)
+- each Target Repository's path, base branch, configured verification commands and verification environment variables, auto-merge permission, and GitHub Actions CI configuration
+- the Issue Workspace root
+- every configured Agent Profile: that it resolves, that its provider adapter validates the profile, that its executable is on `PATH`, that the provider is authenticated, and (where applicable) that its configured model is available
+- the stdio MCP control surface and shipped skills availability
+
+Findings are either blocking (`OK: false`, stop before starting a Labor) or warnings (e.g. auto-merge not permitted on a repository, CI not configured, the Issue Workspace root missing) which are reported but do not by themselves stop execution. `heracles doctor --fix` performs safe, idempotent repairs limited to creating missing Tracker labels and creating the Issue Workspace root; it never authenticates a provider, changes secrets, or makes destructive repository changes. Add `--json` for a stable machine-readable report. `heracles labor` and `heracles run` run Doctor's checks as a mandatory, non-mutating preflight and stop on any blocking finding.
 
 Launch-time Agent Role overrides preserve the original agent-loop command vocabulary and take precedence over configured preferences:
 
@@ -131,6 +152,16 @@ heracles config show --project
 ```
 
 Precedence is launch flags, project preferences, global preferences, then `heracles.yaml`. Global preferences live at `~/.config/heracles/preferences.yaml`; project preferences live at `.heracles/preferences.yaml`.
+
+`heracles config` also supports `unset`, `append`, and `path`:
+
+```sh
+heracles config unset --global agents.implementer.model
+heracles config append --project agents.implementer.env_allowlist=CI_TOKEN
+heracles config path --global
+```
+
+`unset` removes a field (prompting for confirmation unless `--yes` is given) and drops the role entirely once it has no remaining fields. `append` adds a value to a list-typed field, such as `env_allowlist`, without replacing the existing list. `path` prints the resolved preferences file path without reading or writing it.
 
 ## Planning Stage
 
@@ -175,9 +206,14 @@ heracles reject issues labor-1 --reason "Split the migration slice"
 heracles retry labor-1-acme-backlog-7
 heracles resume labor-1
 heracles cancel labor-1 --reason "Superseded"
+heracles status labor-1
 ```
 
-Use `heracles list` with `labors`, `issues`, `change-sets`, `gates`, `logs`, or `evidence`, and use `heracles inspect <kind> <id>` for a single record. Every operational command supports `--config`; stage commands discover `heracles.yaml` upward by default. Add `--json` for a stable machine-readable result and non-zero error exit behavior.
+Use `heracles list` with `labors`, `issues`, `change-sets`, `gates`, `logs`, or `evidence`, and use `heracles inspect <kind> <id>` for a single record. Every operational command supports `--config`; stage commands discover `heracles.yaml` upward by default. Add `--json` for a stable machine-readable result and non-zero error exit behavior. Structured (`--json`) output never includes interactive prompts or update notices.
+
+## Status
+
+`heracles status` reports, for every local Labor (or the one named by an optional Labor ID), its current stage, Defined Backlog progress, Planning and Issue Approval Gate state, pending Change Sets, any Human-In-The-Loop issues still blocking it, and whether `heracles resume` can continue it. A blocked Labor includes `blockers` describing why and `guidance` suggesting what to do next. If a Labor's local state could not be read (for example, after an incompatible upgrade per [Interruption, Cancellation, And Recovery](#interruption-cancellation-and-recovery)), `recovery_error` explains why instead of the rest of the report. Add `--json` for the same information as a stable machine-readable document.
 
 ## MCP Control Surface
 
@@ -316,6 +352,8 @@ labor:
 
 Higher concurrency still respects dependencies, issue `## Exclusive Scopes`, isolated Issue Workspaces, and each selected Agent Profile's concurrency limit. The scheduler skips temporarily conflicting work so independent Ready Issues are not starved, then repeatedly selects newly unblocked work until the defined backlog is empty.
 
+Across all of this, only one Labor may actively mutate a project at a time. `heracles labor`, `run`, and `resume` acquire a project-level lock under `.heracles/` for their duration and release it on exit; a concurrent invocation fails immediately rather than racing the first. If a previous run was killed without releasing the lock, Heracles checks whether the recorded process is still running and, if not, treats the lock as stale and proceeds — there is no manual force-unlock.
+
 ## Implementation Stage
 
 The independently runnable Implementation Stage composes the delivery boundaries into one durable attempt:
@@ -332,7 +370,7 @@ Every transition, evidence reference, verification result, Review outcome, and C
 
 Heracles delivers a completed issue as one Change Set with exactly one pull request for each touched Target Repository. Every pull request links the issue and related pull requests, and includes the review summary, QA steps, and local evidence references.
 
-Automatic merging is disabled by default. It must be enabled explicitly, and can declare cross-repository merge order:
+Automatic merging is enabled by default and can declare cross-repository merge order; set `auto_merge: false` to require manual merges instead:
 
 ```yaml
 delivery:
@@ -340,7 +378,26 @@ delivery:
   merge_order: [backend, shared, frontend]
 ```
 
-Before opening pull requests, every touched repository must pass its configured local verification. With automatic merging enabled, Heracles additionally waits for required GitHub checks before merging each pull request in order. If a later merge fails, already merged pull requests remain recorded, remaining pull requests stay open, and the Change Set becomes blocked for operator attention.
+Before opening pull requests, every touched repository must pass its configured local verification. With automatic merging enabled, Heracles additionally waits for required GitHub checks before merging each pull request in order. If a repository does not permit auto-merge, `heracles doctor` reports it as a warning and that repository's pull requests fall back to review mode: the issue enters a review state and `heracles resume` reconciles the merge once it lands. If a later merge fails, already merged pull requests remain recorded, remaining pull requests stay open, and the Change Set becomes blocked for operator attention.
+
+### Correction Cycles
+
+If a pull request is blocked by requested reviewer changes or a CI failure, Heracles first classifies the failure as **infrastructure** (e.g. a runner outage or transient network error — retried as-is) or **code** (a real failure in the delivered change). A code failure or requested change starts a correction cycle: the Issue Workspace is preserved, the Implementer and Reviewer make corrective changes, and verification reruns. Up to 3 correction cycles are attempted automatically; if the issue is still blocked after that, the Change Set is left blocked for operator attention with a diagnostic status explaining the last failure.
+
+## Interruption, Cancellation, And Recovery
+
+`heracles run`, `labor`, and `resume` durably checkpoint progress so they can be safely interrupted:
+
+- The **first** `Ctrl-C` (SIGINT) or SIGTERM asks the running Labor to stop at its next durable boundary, leaving resumable state. The current issue's Issue Workspace is preserved, not torn down mid-edit.
+- A **second** `Ctrl-C`/SIGTERM cancels a hard context, terminating in-flight provider subprocesses immediately. The most recently checkpointed state is preserved even so.
+
+`heracles resume <labor-id>` continues a stopped or blocked Labor from its latest durable boundary without repeating committed work or duplicating issues or pull requests.
+
+`heracles cancel <labor-id>` marks a Labor as cancelled in local state. It is irreversible locally and prompts for confirmation ("Cancel Labor `<id>`? This cannot be undone locally. Issues, Pull Requests, and Change Sets on GitHub are left unchanged.") unless `--yes` is given; GitHub issues, pull requests, and Change Sets it already created are left exactly as they are.
+
+### Upgrades And State Migration
+
+Local state under `.heracles/` (Labor state, preferences, history) carries a schema version. When a newer Heracles version reads state written by an older one, it applies versioned migrations automatically after writing a backup of the original file. A migration that would change meaning in a way that cannot be safely automated requires explicit confirmation before it mutates anything. An **older** binary that encounters state written by a newer schema version refuses to read or rewrite it, so downgrading never silently corrupts state — `heracles status` reports the unreadable Labor's `recovery_error` instead.
 
 ## Reference
 
