@@ -52,8 +52,21 @@ func TestProviderAdaptersBuildValidatedNonInteractiveInvocations(t *testing.T) {
 			provider: "kimi",
 			profile:  agent.Profile{Model: "kimi-k2.5"},
 			command:  "kimi",
-			args:     []string{"--print", "--output-format", "stream-json", "--work-dir", "/workspace", "--add-dir", "/shared", "--model", "kimi-k2.5"},
+			args:     []string{"--print", "--yolo", "--output-format", "stream-json", "--work-dir", "/workspace", "--add-dir", "/shared", "--model", "kimi-k2.5"},
 			stdin:    "do the work",
+		},
+		{
+			provider: "openclaw",
+			profile:  agent.Profile{Model: "gpt-5", Effort: "high"},
+			command:  "openclaw",
+			args:     []string{"run", "--print", "--full-access", "--output-format", "json", "--work-dir", "/workspace", "--add-dir", "/shared", "--model", "gpt-5", "--effort", "high"},
+			stdin:    "do the work",
+		},
+		{
+			provider: "hermes",
+			profile:  agent.Profile{Model: "hermes-4", Variant: "thinking"},
+			command:  "hermes",
+			args:     []string{"run", "--dir", "/workspace", "--unsafe", "--format", "json", "--model", "hermes-4", "--variant", "thinking", "do the work"},
 		},
 	}
 
@@ -85,6 +98,35 @@ func TestProviderAdaptersBuildValidatedNonInteractiveInvocations(t *testing.T) {
 	}
 }
 
+func TestProviderAdaptersIncludeVerifiedFullPermissionBypassFlags(t *testing.T) {
+	t.Parallel()
+
+	registry := agent.DefaultRegistry()
+	workspaces := []string{"/workspace"}
+	for provider, flag := range map[string]string{
+		"codex":    "--dangerously-bypass-approvals-and-sandbox",
+		"claude":   "--dangerously-skip-permissions",
+		"opencode": "--dangerously-skip-permissions",
+		"kimi":     "--yolo",
+		"openclaw": "--full-access",
+		"hermes":   "--unsafe",
+	} {
+		t.Run(provider, func(t *testing.T) {
+			adapter, err := registry.Adapter(provider)
+			if err != nil {
+				t.Fatalf("Adapter() error = %v", err)
+			}
+			invocation, err := adapter.Invocation(agent.Profile{}, workspaces, "do the work")
+			if err != nil {
+				t.Fatalf("Invocation() error = %v", err)
+			}
+			if !slices.Contains(invocation.Args, flag) {
+				t.Errorf("%s args = %#v, want verified full-permission bypass flag %q", provider, invocation.Args, flag)
+			}
+		})
+	}
+}
+
 func TestProviderCapabilitiesRejectUnsupportedSettings(t *testing.T) {
 	t.Parallel()
 
@@ -98,6 +140,8 @@ func TestProviderCapabilitiesRejectUnsupportedSettings(t *testing.T) {
 		"codex variant":       {provider: "codex", profile: agent.Profile{Variant: "fast"}, expected: "variant"},
 		"opencode effort":     {provider: "opencode", profile: agent.Profile{Effort: "high"}, expected: "effort"},
 		"kimi effort":         {provider: "kimi", profile: agent.Profile{Effort: "high"}, expected: "effort"},
+		"hermes effort":       {provider: "hermes", profile: agent.Profile{Effort: "high"}, expected: "effort"},
+		"openclaw variant":    {provider: "openclaw", profile: agent.Profile{Variant: "fast"}, expected: "variant"},
 		"unsupported effort":  {provider: "codex", profile: agent.Profile{Effort: "maximum"}, expected: "maximum"},
 		"nonpositive timeout": {provider: "codex", profile: agent.Profile{Timeout: -time.Second}, expected: "timeout"},
 	} {
