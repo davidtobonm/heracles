@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/davidtobonm/heracles/internal/agent"
@@ -135,7 +136,9 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 		state, err := local.issues.Run(ctx, issuestage.RunRequest{ID: operation.ID, ApprovedPRD: operation.PRD, TrackerRepository: local.trackerRepository()})
 		return result(operation, state.Status, state), err
 	case "run":
-		value, err := local.backlog("implementation-direct", "").Run(ctx)
+		backlog := local.backlog("implementation-direct", "")
+		backlog.Limit = operation.Limit
+		value, err := backlog.Run(ctx)
 		status := "completed"
 		if err != nil {
 			status = "blocked"
@@ -213,7 +216,8 @@ func (local *Local) labor(id string) labor.Service {
 
 func (local *Local) backlog(laborID, prd string) implementation.BacklogRunner {
 	return implementation.BacklogRunner{
-		Source: local.tracker, Scheduler: local.scheduler, Executor: &attemptExecutor{local: local, laborID: laborID, prd: prd}, Profile: local.profile,
+		Source:    resumableBacklogSource{Source: local.tracker, History: local.history, LaborID: laborID},
+		Scheduler: local.scheduler, Executor: &attemptExecutor{local: local, laborID: laborID, prd: prd}, Profile: local.profile,
 	}
 }
 
@@ -247,6 +251,102 @@ type attemptExecutor struct {
 	local   *Local
 	laborID string
 	prd     string
+}
+
+type resumableBacklogSource struct {
+	Source  implementation.BacklogSource
+	History *history.Store
+	LaborID string
+}
+
+func (source resumableBacklogSource) ReadyIssues(ctx context.Context) ([]tracker.Issue, error) {
+	ready, err := source.Source.ReadyIssues(ctx)
+	if err != nil {
+		return nil, err
+	}
+	open, err := source.Source.OpenIssues(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resumable, err := source.resumableIssues(ctx, open)
+	if err != nil {
+		return nil, err
+	}
+	merged := append([]tracker.Issue(nil), resumable...)
+	for _, issue := range ready {
+		if !containsIssue(merged, issue.URL) {
+			merged = append(merged, issue)
+		}
+	}
+	slices.SortFunc(merged, func(left, right tracker.Issue) int {
+		if left.CreatedAt.Equal(right.CreatedAt) {
+			return left.Number - right.Number
+		}
+		if left.CreatedAt.Before(right.CreatedAt) {
+			return -1
+		}
+		return 1
+	})
+	return merged, nil
+}
+
+func (source resumableBacklogSource) OpenIssues(ctx context.Context) ([]tracker.Issue, error) {
+	return source.Source.OpenIssues(ctx)
+}
+
+func (source resumableBacklogSource) resumableIssues(ctx context.Context, open []tracker.Issue) ([]tracker.Issue, error) {
+	if source.History == nil || source.LaborID == "" {
+		return nil, nil
+	}
+	snapshot, err := source.History.Snapshot(ctx, source.LaborID)
+	if err != nil {
+		if strings.Contains(err.Error(), "sql: no rows in result set") {
+			for _, issue := range open {
+				if slices.Contains(issue.Labels, tracker.LabelInProgress) {
+					return nil, fmt.Errorf("issue %s is marked %s but no local Labor state exists", issue.URL, tracker.LabelInProgress)
+				}
+			}
+			return nil, nil
+		}
+		return nil, err
+	}
+	attempts := make(map[string]history.IssueAttempt, len(snapshot.IssueAttempts))
+	for _, attempt := range snapshot.IssueAttempts {
+		attempts[attempt.IssueURL] = attempt
+	}
+	var resumable []tracker.Issue
+	for _, issue := range open {
+		if !slices.Contains(issue.Labels, tracker.LabelInProgress) {
+			continue
+		}
+		attempt, ok := attempts[issue.URL]
+		if !ok {
+			return nil, fmt.Errorf("issue %s is marked %s but has no resumable local attempt", issue.URL, tracker.LabelInProgress)
+		}
+		if !isResumableAttempt(attempt.Status) {
+			return nil, fmt.Errorf("issue %s is marked %s but local attempt %q is %s", issue.URL, tracker.LabelInProgress, attempt.ID, attempt.Status)
+		}
+		resumable = append(resumable, issue)
+	}
+	return resumable, nil
+}
+
+func isResumableAttempt(status string) bool {
+	switch status {
+	case implementation.StatusNew, implementation.StatusClaimed, implementation.StatusWorkspaceReady, implementation.StatusImplemented, implementation.StatusReviewed, implementation.StatusVerified, implementation.StatusDelivered:
+		return true
+	default:
+		return false
+	}
+}
+
+func containsIssue(issues []tracker.Issue, url string) bool {
+	for _, issue := range issues {
+		if issue.URL == url {
+			return true
+		}
+	}
+	return false
 }
 
 func (executor *attemptExecutor) Execute(ctx context.Context, candidate scheduler.Candidate) error {

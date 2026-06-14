@@ -1,0 +1,27 @@
+version: 1
+issue_tracker:
+    github: davidtobonm/heracles
+repositories:
+    - name: heracles
+      path: .
+      github: davidtobonm/heracles
+      base_branch: main
+agents:
+    default_profile: default
+    profiles:
+        default:
+            provider: codex
+            timeout: 1h
+            env_allowlist:
+                - PATH
+                - HOME
+            concurrency: 1
+workspaces:
+    root: .heracles/workspaces
+    cleanup_success: true
+    preserve_failed: true
+    preserve_blocked: true
+labor:
+    issue_concurrency: 1
+planning:
+    question_budget: 20

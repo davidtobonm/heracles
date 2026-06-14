@@ -181,6 +181,29 @@ func (s *Store) TransitionIssueAttempt(ctx context.Context, id, expected, next, 
 	return s.transitionRecord(ctx, "issue_attempts", "Issue Attempt", id, expected, next, eventType, payload, id)
 }
 
+// UpdateIssueAttemptWorkspacePath synchronizes durable workspace metadata without a status transition.
+func (s *Store) UpdateIssueAttemptWorkspacePath(ctx context.Context, id, workspacePath string) error {
+	if id == "" {
+		return errors.New("Issue Attempt workspace sync requires id")
+	}
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE issue_attempts SET workspace_path = ?, updated_at = ? WHERE id = ?`,
+		workspacePath, timestamp(now), id,
+	)
+	if err != nil {
+		return fmt.Errorf("sync Issue Attempt workspace path: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("inspect Issue Attempt workspace sync: %w", err)
+	}
+	if changed != 1 {
+		return fmt.Errorf("Issue Attempt %q not found", id)
+	}
+	return nil
+}
+
 // TransitionApprovalGate atomically changes an Approval Gate status.
 func (s *Store) TransitionApprovalGate(ctx context.Context, id, expected, next, eventType string, payload any) error {
 	return s.transitionRecord(ctx, "approval_gates", "Approval Gate", id, expected, next, eventType, payload, "")
@@ -302,7 +325,17 @@ func (s *Store) transitionRecord(ctx context.Context, table, label, id, expected
 	if err := tx.QueryRowContext(ctx, `SELECT labor_id FROM `+table+` WHERE id = ?`, id).Scan(&laborID); err != nil {
 		return fmt.Errorf("read %s for transition: %w", label, err)
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE `+table+` SET status = ?, updated_at = ? WHERE id = ? AND status = ?`, next, timestamp(now), id, expected)
+	query := `UPDATE ` + table + ` SET status = ?, updated_at = ?`
+	args := []any{next, timestamp(now)}
+	if table == "issue_attempts" {
+		if workspacePath, ok := transitionWorkspacePath(payload); ok {
+			query += `, workspace_path = ?`
+			args = append(args, workspacePath)
+		}
+	}
+	query += ` WHERE id = ? AND status = ?`
+	args = append(args, id, expected)
+	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("transition %s: %w", label, err)
 	}
@@ -325,6 +358,25 @@ func (s *Store) transitionRecord(ctx context.Context, table, label, id, expected
 		return fmt.Errorf("commit %s transition: %w", label, err)
 	}
 	return s.appendJSONL(event)
+}
+
+func transitionWorkspacePath(payload any) (string, bool) {
+	switch value := payload.(type) {
+	case map[string]string:
+		workspacePath, ok := value["workspace_path"]
+		if !ok || workspacePath == "" {
+			return "", false
+		}
+		return workspacePath, true
+	case map[string]any:
+		workspacePath, ok := value["workspace_path"].(string)
+		if !ok || workspacePath == "" {
+			return "", false
+		}
+		return workspacePath, true
+	default:
+		return "", false
+	}
 }
 
 func (s *Store) stages(ctx context.Context, laborID string) ([]Stage, error) {

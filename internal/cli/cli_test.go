@@ -81,6 +81,65 @@ func TestControlCommandsUseSharedSurfaceAndStableJSON(t *testing.T) {
 	}
 }
 
+func TestRunAcceptsOriginalAgentLoopFlagsAndLimit(t *testing.T) {
+	t.Parallel()
+
+	surface := &fakeControl{}
+	var stdout, stderr bytes.Buffer
+	exit := cli.RunWithOptions([]string{
+		"run",
+		"--implementer", "opencode",
+		"--implementer-model", "opencode-go/kimi-k2.6",
+		"--implementer-effort", "medium",
+		"--reviewer", "codex",
+		"--reviewer-model", "gpt-5.5",
+		"--reviewer-effort", "high",
+		"--limit", "40",
+	}, &stdout, &stderr, cli.Options{Control: surface})
+	if exit != 0 {
+		t.Fatalf("run exit = %d; stderr = %q", exit, stderr.String())
+	}
+	if len(surface.operations) != 1 || surface.operations[0].Limit != 40 {
+		t.Errorf("operations = %#v, want run limit 40", surface.operations)
+	}
+}
+
+func TestConfigSetWritesGlobalAndProjectPreferences(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "heracles.yaml"), []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, testCase := range []struct {
+		args []string
+		path string
+	}{
+		{
+			args: []string{"config", "set", "--global", "--implementer", "opencode", "--implementer-model", "opencode-go/kimi-k2.6", "--implementer-effort", "medium"},
+			path: filepath.Join(home, ".config", "heracles", "preferences.yaml"),
+		},
+		{
+			args: []string{"config", "set", "--project", "--reviewer", "codex", "--reviewer-model", "gpt-5.5", "--reviewer-effort", "high"},
+			path: filepath.Join(root, ".heracles", "preferences.yaml"),
+		},
+	} {
+		var stdout, stderr bytes.Buffer
+		exit := cli.RunWithOptions(testCase.args, &stdout, &stderr, cli.Options{WorkingDirectory: root, HomeDirectory: home})
+		if exit != 0 {
+			t.Fatalf("%v exit = %d; stderr = %q", testCase.args, exit, stderr.String())
+		}
+		contents, err := os.ReadFile(testCase.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", testCase.path, err)
+		}
+		if !strings.Contains(string(contents), "provider:") || !strings.Contains(string(contents), "model:") {
+			t.Errorf("preferences %q missing provider/model", contents)
+		}
+	}
+}
+
 func TestListInspectAndOperationsValidateArguments(t *testing.T) {
 	t.Parallel()
 
@@ -122,7 +181,7 @@ func TestInitCreatesDetectedProjectConfiguration(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := cli.RunWithOptions([]string{"init"}, &stdout, &stderr, cli.Options{
+	exitCode := cli.RunWithOptions([]string{"init", "--tracker", "example/widget", "--repo", repositoryPath}, &stdout, &stderr, cli.Options{
 		WorkingDirectory: repositoryPath,
 	})
 
@@ -135,6 +194,57 @@ func TestInitCreatesDetectedProjectConfiguration(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repositoryPath, "heracles.yaml")); err != nil {
 		t.Errorf("Project Configuration was not created: %v", err)
 	}
+}
+
+func TestInitWithoutFlagsRunsInteractiveSetup(t *testing.T) {
+	t.Parallel()
+
+	repositoryPath := filepath.Join(t.TempDir(), "widget")
+	runCommand(t, "", "git", "init", "--initial-branch=main", repositoryPath)
+	runCommand(t, repositoryPath, "git", "remote", "add", "origin", "git@github.com:example/widget.git")
+	if err := os.WriteFile(filepath.Join(repositoryPath, "go.mod"), []byte("module example.com/widget\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	input := strings.NewReader(strings.Repeat("\n", 6))
+	exitCode := cli.RunWithOptions([]string{"init"}, &stdout, &stderr, cli.Options{
+		WorkingDirectory: repositoryPath,
+		HomeDirectory:    t.TempDir(),
+		Input:            input,
+		DoctorSystem:     fakeInitDoctorSystem{},
+	})
+
+	if exitCode != 0 {
+		t.Fatalf("RunWithOptions(init) exit code = %d, want 0; stdout = %q, stderr = %q", exitCode, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Wrote Project Configuration to") {
+		t.Errorf("stdout = %q, want write confirmation", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(repositoryPath, "heracles.yaml")); err != nil {
+		t.Errorf("Project Configuration was not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repositoryPath, ".heracles", "preferences.yaml")); err != nil {
+		t.Errorf("Agent Role preferences were not created: %v", err)
+	}
+}
+
+type fakeInitDoctorSystem struct{}
+
+func (fakeInitDoctorSystem) LookPath(executable string) (string, error) {
+	if executable == "git" || executable == "gh" || executable == "codex" {
+		return "/usr/bin/" + executable, nil
+	}
+	return "", os.ErrNotExist
+}
+
+func (fakeInitDoctorSystem) Run(context.Context, string, ...string) error {
+	return nil
+}
+
+func (fakeInitDoctorSystem) Output(context.Context, string, ...string) (string, error) {
+	return "", nil
 }
 
 func TestInitHelpExitsSuccessfully(t *testing.T) {
@@ -239,6 +349,10 @@ func (surface *fakeControl) Close() error { return nil }
 
 func (cliFakeSystem) Run(context.Context, string, ...string) error {
 	return nil
+}
+
+func (cliFakeSystem) Output(context.Context, string, ...string) (string, error) {
+	return "", nil
 }
 
 func runCommand(t testing.TB, workingDirectory, command string, args ...string) {

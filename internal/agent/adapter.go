@@ -32,6 +32,7 @@ type Capabilities struct {
 // Registry contains the supported provider adapters.
 type Registry struct {
 	adapters map[string]Adapter
+	order    []string
 }
 
 // DefaultRegistry returns the supported v1 provider adapters.
@@ -42,9 +43,10 @@ func DefaultRegistry() Registry {
 		providerAdapter{name: "opencode", executable: "opencode", model: true, variant: true, promptArg: true, build: opencodeInvocation},
 		providerAdapter{name: "kimi", executable: "kimi", model: true, build: kimiInvocation},
 	}
-	registry := Registry{adapters: make(map[string]Adapter, len(adapters))}
-	for _, adapter := range adapters {
+	registry := Registry{adapters: make(map[string]Adapter, len(adapters)), order: make([]string, len(adapters))}
+	for index, adapter := range adapters {
 		registry.adapters[adapter.Name()] = adapter
+		registry.order[index] = adapter.Name()
 	}
 	return registry
 }
@@ -56,6 +58,11 @@ func (r Registry) Adapter(name string) (Adapter, error) {
 		return nil, fmt.Errorf("unsupported provider %q", name)
 	}
 	return adapter, nil
+}
+
+// Names returns the supported provider names in their declared order.
+func (r Registry) Names() []string {
+	return append([]string(nil), r.order...)
 }
 
 type providerAdapter struct {
@@ -136,7 +143,13 @@ func codexInvocation(profile Profile, workspaces []string, prompt string) Invoca
 }
 
 func claudeInvocation(profile Profile, workspaces []string, prompt string) Invocation {
-	args := []string{"-p", "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions", "--output-format", "stream-json", "--verbose"}
+	args := []string{"-p", "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"}
+	if !hasFlag(profile.ExtraArgs, "--output-format") {
+		args = append(args, "--output-format", "stream-json")
+	}
+	if !hasFlag(profile.ExtraArgs, "--output-format") || flagValue(profile.ExtraArgs, "--output-format") == "stream-json" {
+		args = append(args, "--verbose")
+	}
 	for _, workspace := range workspaces[1:] {
 		args = append(args, "--add-dir", workspace)
 	}
@@ -170,4 +183,25 @@ func kimiInvocation(profile Profile, workspaces []string, prompt string) Invocat
 		args = append(args, "--model", profile.Model)
 	}
 	return Invocation{Command: "kimi", Args: args, Stdin: prompt}
+}
+
+func hasFlag(args []string, flag string) bool {
+	for _, arg := range args {
+		if arg == flag || strings.HasPrefix(arg, flag+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func flagValue(args []string, flag string) string {
+	for index, arg := range args {
+		if arg == flag && index+1 < len(args) {
+			return args[index+1]
+		}
+		if strings.HasPrefix(arg, flag+"=") {
+			return strings.TrimPrefix(arg, flag+"=")
+		}
+	}
+	return ""
 }

@@ -18,6 +18,23 @@ type Runner struct {
 	environment []string
 }
 
+var essentialEnvironment = []string{
+	"HOME",
+	"PATH",
+	"LANG",
+	"LC_ALL",
+	"LC_CTYPE",
+	"SHELL",
+	"TERM",
+	"TMPDIR",
+	"USER",
+	"LOGNAME",
+	"XDG_CONFIG_HOME",
+	"XDG_CACHE_HOME",
+	"XDG_DATA_HOME",
+	"SSH_AUTH_SOCK",
+}
+
 // Result is one completed provider invocation.
 type Result struct {
 	Invocation Invocation
@@ -74,7 +91,14 @@ func (r Runner) Run(ctx context.Context, provider string, profile Profile, works
 		if errors.Is(runContext.Err(), context.DeadlineExceeded) {
 			return result, fmt.Errorf("provider %s timed out after %s", provider, profile.Timeout)
 		}
-		return result, fmt.Errorf("provider %s failed with exit code %d: %s", provider, result.ExitCode, strings.TrimSpace(result.Stderr))
+		message := strings.TrimSpace(result.Stderr)
+		if message == "" {
+			message = strings.TrimSpace(result.Stdout)
+		}
+		if message == "" {
+			message = runErr.Error()
+		}
+		return result, fmt.Errorf("provider %s failed with exit code %d: %s", provider, result.ExitCode, message)
 	}
 
 	result.Final, err = NormalizeOutput(result.Stdout)
@@ -84,7 +108,8 @@ func (r Runner) Run(ctx context.Context, provider string, profile Profile, works
 	return result, nil
 }
 
-// AllowedEnvironment filters environment variables to an explicit allowlist.
+// AllowedEnvironment filters environment variables to an explicit allowlist plus
+// the essential process variables required by authenticated CLI providers.
 func AllowedEnvironment(allowlist, source []string) []string {
 	values := make(map[string]string, len(source))
 	for _, entry := range source {
@@ -93,8 +118,15 @@ func AllowedEnvironment(allowlist, source []string) []string {
 			values[name] = entry
 		}
 	}
-	environment := make([]string, 0, len(allowlist))
-	for _, name := range allowlist {
+	names := append([]string(nil), essentialEnvironment...)
+	names = append(names, allowlist...)
+	seen := make(map[string]bool, len(names))
+	environment := make([]string, 0, len(names))
+	for _, name := range names {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
 		if entry, exists := values[name]; exists {
 			environment = append(environment, entry)
 		}
@@ -105,6 +137,7 @@ func AllowedEnvironment(allowlist, source []string) []string {
 // NormalizeOutput extracts the last provider message from text or JSONL output.
 func NormalizeOutput(output string) (string, error) {
 	var final string
+	terminalSeen := false
 	for _, rawLine := range strings.Split(output, "\n") {
 		line := strings.TrimSpace(rawLine)
 		if line == "" {
@@ -113,9 +146,27 @@ func NormalizeOutput(output string) (string, error) {
 
 		var value any
 		if json.Unmarshal([]byte(line), &value) == nil {
+			if typed, ok := value.(map[string]any); ok {
+				if terminal, ok, err := terminalResult(typed); ok {
+					terminalSeen = true
+					if err != nil {
+						return "", err
+					}
+					if terminal != "" {
+						return terminal, nil
+					}
+					continue
+				}
+			}
+			if terminalSeen {
+				continue
+			}
 			if candidate := finalString(value); candidate != "" {
 				final = candidate
 			}
+			continue
+		}
+		if terminalSeen {
 			continue
 		}
 		final = line
@@ -124,6 +175,44 @@ func NormalizeOutput(output string) (string, error) {
 		return "", errors.New("provider returned no final message")
 	}
 	return final, nil
+}
+
+func terminalResult(value map[string]any) (string, bool, error) {
+	eventType, _ := value["type"].(string)
+	if eventType != "result" {
+		return "", false, nil
+	}
+	if structured, exists := value["structured_output"]; exists {
+		payload, err := marshalTerminalJSON(structured)
+		if err != nil {
+			return "", true, fmt.Errorf("marshal structured provider output: %w", err)
+		}
+		if isError, _ := value["is_error"].(bool); isError {
+			return "", true, errors.New(payload)
+		}
+		return payload, true, nil
+	}
+	if message := finalString(value["result"]); message != "" {
+		if isError, _ := value["is_error"].(bool); isError {
+			return "", true, errors.New(message)
+		}
+		return message, true, nil
+	}
+	if isError, _ := value["is_error"].(bool); isError {
+		if subtype, _ := value["subtype"].(string); subtype != "" {
+			return "", true, fmt.Errorf("provider execution ended with %s", subtype)
+		}
+		return "", true, errors.New("provider execution ended with an error")
+	}
+	return "", true, nil
+}
+
+func marshalTerminalJSON(value any) (string, error) {
+	contents, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return string(contents), nil
 }
 
 func finalString(value any) string {
@@ -137,6 +226,9 @@ func finalString(value any) string {
 			}
 		}
 	case map[string]any:
+		if eventType, _ := typed["type"].(string); eventType == "turn.completed" || eventType == "thread.started" || eventType == "assistant" || eventType == "user" || eventType == "system" || eventType == "step_start" || eventType == "step_finish" {
+			return ""
+		}
 		for _, key := range []string{"result", "final", "content", "text", "message"} {
 			if candidate := finalString(typed[key]); candidate != "" {
 				return candidate

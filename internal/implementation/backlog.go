@@ -25,6 +25,7 @@ type BacklogRunner struct {
 	Scheduler scheduler.Scheduler
 	Executor  scheduler.Executor
 	Profile   string
+	Limit     int
 }
 
 // BacklogResult is the terminal defined-backlog outcome.
@@ -58,6 +59,15 @@ func (runner BacklogRunner) Run(ctx context.Context) (BacklogResult, error) {
 			}
 			return result, fmt.Errorf("%w: %d open issues remain", ErrBacklogBlocked, len(open))
 		}
+		if runner.Limit > 0 {
+			remaining := runner.Limit - len(result.Completed)
+			if remaining <= 0 {
+				return result, nil
+			}
+			if len(ready) > remaining {
+				ready = ready[:remaining]
+			}
+		}
 		candidates := make([]scheduler.Candidate, len(ready))
 		for index, issue := range ready {
 			candidates[index] = scheduler.Candidate{
@@ -68,6 +78,9 @@ func (runner BacklogRunner) Run(ctx context.Context) (BacklogResult, error) {
 		result.Completed = append(result.Completed, batch.Completed...)
 		if err != nil {
 			return result, err
+		}
+		if runner.Limit > 0 && len(result.Completed) >= runner.Limit {
+			return result, nil
 		}
 	}
 }

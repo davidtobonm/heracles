@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/davidtobonm/heracles/internal/agent"
 	"github.com/davidtobonm/heracles/internal/delivery"
@@ -38,17 +39,24 @@ func (implementer AgentImplementer) Implement(ctx context.Context, implementCont
 	prompt := `You are the configured Heracles Implementer.
 
 Implement the issue in the provided isolated worktrees. Work test-first and return auditable Red Evidence followed by Green Evidence unless the issue has a reasoned TDD Exemption.
-Return JSON only using fields: changes, evidence, evidence_policy.
+Your final assistant message must be exactly one JSON object with no markdown fences and no surrounding commentary.
+Use only these top-level fields: changes, evidence, evidence_policy.
+Example:
+{"changes":"summarize the implementation","evidence":[{"kind":"red","command":"go test ./...","exit_code":1,"artifact_path":"artifacts/red.txt"},{"kind":"green","command":"go test ./...","exit_code":0,"artifact_path":"artifacts/green.txt"}],"evidence_policy":{"Exempt":false,"Reason":""}}
 
 Implementation context:
 ` + string(contextJSON)
-	result, err := implementer.Runner.Run(ctx, implementer.Profile.Provider, implementer.Profile, workspaces, prompt)
+	profile := implementer.Profile
+	if strings.EqualFold(profile.Provider, "claude") {
+		profile.ExtraArgs = append(agentExtraArgs(profile.ExtraArgs), "--output-format", "json", "--json-schema", implementerSchema)
+	}
+	result, err := implementer.Runner.Run(ctx, profile.Provider, profile, workspaces, prompt)
 	if err != nil {
 		return ImplementationResult{}, err
 	}
 	var output ImplementationResult
-	if err := json.Unmarshal([]byte(result.Final), &output); err != nil {
-		return ImplementationResult{}, fmt.Errorf("decode structured Implementer response: %w", err)
+	if err := agent.DecodeStructuredJSON(result.Final, &output); err != nil {
+		return ImplementationResult{}, fmt.Errorf("decode structured Implementer response: %w; final output excerpt: %s", err, excerpt(result.Final))
 	}
 	return output, nil
 }
@@ -70,9 +78,14 @@ func (reviewer AgentReviewer) Review(ctx context.Context, issueWorkspace workspa
 	}
 	prompt := delivery.ReviewerPrompt(reviewContext) + `
 
-Return JSON only using fields: status, summary, corrective_changes, verification.
+Your final assistant message must be exactly one JSON object with no markdown fences and no surrounding commentary.
+Use only these fields: status, summary, corrective_changes, verification.
 `
-	result, err := reviewer.Runner.Run(ctx, reviewer.Profile.Provider, reviewer.Profile, workspaces, prompt)
+	profile := reviewer.Profile
+	if strings.EqualFold(profile.Provider, "claude") {
+		profile.ExtraArgs = append(agentExtraArgs(profile.ExtraArgs), "--output-format", "json", "--json-schema", reviewerSchema)
+	}
+	result, err := reviewer.Runner.Run(ctx, profile.Provider, profile, workspaces, prompt)
 	if err != nil {
 		return delivery.ReviewOutcome{}, err
 	}
@@ -82,14 +95,30 @@ Return JSON only using fields: status, summary, corrective_changes, verification
 		CorrectiveChanges bool                    `json:"corrective_changes"`
 		Verification      []delivery.Verification `json:"verification"`
 	}
-	if err := json.Unmarshal([]byte(result.Final), &outcome); err != nil {
-		return delivery.ReviewOutcome{}, fmt.Errorf("decode structured Reviewer response: %w", err)
+	if err := agent.DecodeStructuredJSON(result.Final, &outcome); err != nil {
+		return delivery.ReviewOutcome{}, fmt.Errorf("decode structured Reviewer response: %w; final output excerpt: %s", err, excerpt(result.Final))
 	}
 	return delivery.ReviewOutcome{
 		Status: outcome.Status, Summary: outcome.Summary,
 		CorrectiveChanges: outcome.CorrectiveChanges, Verification: outcome.Verification,
 	}, nil
 }
+
+func excerpt(text string) string {
+	value := strings.TrimSpace(text)
+	if len(value) <= 240 {
+		return value
+	}
+	return strings.TrimSpace(value[:240]) + "..."
+}
+
+func agentExtraArgs(values []string) []string {
+	return append([]string(nil), values...)
+}
+
+const implementerSchema = `{"type":"object","properties":{"changes":{"type":"string"},"evidence":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string"},"repository":{"type":"string"},"command":{"type":"string"},"exit_code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"},"started_at":{"type":"string"},"finished_at":{"type":"string"},"artifact_path":{"type":"string"}},"required":["kind","command","exit_code","started_at","finished_at","artifact_path"],"additionalProperties":false}},"evidence_policy":{"type":"object","properties":{"Exempt":{"type":"boolean"},"Reason":{"type":"string"}},"required":["Exempt","Reason"],"additionalProperties":false}},"required":["changes","evidence_policy"],"additionalProperties":false}`
+
+const reviewerSchema = `{"type":"object","properties":{"status":{"type":"string"},"summary":{"type":"string"},"corrective_changes":{"type":"boolean"},"verification":{"type":"array","items":{"type":"object","properties":{"repository":{"type":"string"},"command":{"type":"string"},"exit_code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"},"started_at":{"type":"string"},"finished_at":{"type":"string"}},"required":["repository","command","exit_code","stdout","stderr","started_at","finished_at"],"additionalProperties":false}}},"required":["status","summary","corrective_changes","verification"],"additionalProperties":false}`
 
 func workspacePaths(issueWorkspace workspace.Workspace) []string {
 	paths := make([]string, len(issueWorkspace.Repositories))

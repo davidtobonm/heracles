@@ -33,6 +33,7 @@ type RepositoryConfig struct {
 	GitHub     string   `yaml:"github"`
 	BaseBranch string   `yaml:"base_branch"`
 	Verify     []string `yaml:"verify,omitempty"`
+	VerifyEnv  []string `yaml:"verify_env,omitempty"`
 }
 
 // AgentConfig declares reusable profiles and Agent Role assignments.

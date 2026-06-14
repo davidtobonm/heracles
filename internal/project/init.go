@@ -121,14 +121,15 @@ func Initialize(ctx context.Context, options InitOptions) (InitResult, error) {
 	if err := validate(config); err != nil {
 		return InitResult{}, err
 	}
-	if err := writeConfig(configPath, config); err != nil {
+	if err := WriteConfig(configPath, config); err != nil {
 		return InitResult{}, err
 	}
 
 	return InitResult{Path: configPath, Config: config}, nil
 }
 
-func writeConfig(path string, config Config) error {
+// WriteConfig persists a Project Configuration to path as YAML.
+func WriteConfig(path string, config Config) error {
 	contents, err := yaml.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("encode Project Configuration: %w", err)

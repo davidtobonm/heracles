@@ -43,7 +43,7 @@ func TestCompiledBinaryExposesHelpAndVersion(t *testing.T) {
 	run(t, "", "git", "init", "--initial-branch=main", repositoryPath)
 	run(t, repositoryPath, "git", "remote", "add", "origin", "git@github.com:example/widget.git")
 
-	initCommand := exec.Command(binaryPath, "init")
+	initCommand := exec.Command(binaryPath, "init", "--tracker", "example/widget", "--repo", repositoryPath)
 	initCommand.Dir = repositoryPath
 	if output, err := initCommand.CombinedOutput(); err != nil {
 		t.Fatalf("run init: %v\n%s", err, output)
