@@ -145,7 +145,9 @@ func TestInstallCopiesExecutableBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat() error = %v", err)
 	}
-	if info.Mode().Perm()&0o111 == 0 {
+	// Windows has no execute permission bit in os.Stat; executability is
+	// determined by the .exe extension, which Resolve already applies.
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 		t.Errorf("installed file mode = %v, want executable bit set", info.Mode())
 	}
 }
