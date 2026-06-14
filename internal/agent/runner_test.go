@@ -217,6 +217,36 @@ func TestRunnerRedactsAllowlistedSecretValuesFromOutput(t *testing.T) {
 	}
 }
 
+func TestRunnerWithSessionInjectsAndCleansUpSkillsAndMCPConfig(t *testing.T) {
+	fake := fakeexec.New(t, fakeexec.Response{
+		Stdout: "{\"type\":\"result\",\"result\":\"done\"}\n",
+	})
+	binDirectory := t.TempDir()
+	if err := os.Symlink(fake.Path, filepath.Join(binDirectory, "codex")); err != nil {
+		t.Fatalf("link fake codex: %v", err)
+	}
+	path := binDirectory + string(os.PathListSeparator) + os.Getenv("PATH")
+	t.Setenv("PATH", path)
+
+	workspace := t.TempDir()
+	runner := agent.NewRunner(agent.DefaultRegistry(), []string{"PATH=" + path}).
+		WithSession("/project/heracles.yaml", "/usr/local/bin/heracles")
+
+	if _, err := runner.Run(context.Background(), "codex", agent.Profile{
+		Timeout:      3 * time.Second,
+		EnvAllowlist: []string{"PATH"},
+	}, []string{workspace}, "deliver issue"); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(workspace, ".codex", "config.toml")); !os.IsNotExist(err) {
+		t.Errorf("Stat(.codex/config.toml) error = %v, want removed once the session ends", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".codex", "skills", "grill-with-docs")); !os.IsNotExist(err) {
+		t.Errorf("Stat(.codex/skills/grill-with-docs) error = %v, want removed once the session ends", err)
+	}
+}
+
 func contains(values []string, expected string) bool {
 	for _, value := range values {
 		if value == expected {

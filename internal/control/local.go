@@ -75,6 +75,9 @@ func NewLocalWithSystem(ctx context.Context, loaded project.LoadedConfig, system
 		return nil, err
 	}
 	runner := agent.NewRunner(agent.DefaultRegistry(), nil)
+	if executable, err := os.Executable(); err == nil {
+		runner = runner.WithSession(loaded.Path, executable)
+	}
 	commandRunner := tracker.OSCommandRunner{}
 	trackerClient := tracker.NewGitHubClient(commandRunner)
 

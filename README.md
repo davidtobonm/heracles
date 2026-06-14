@@ -204,6 +204,67 @@ Example MCP client configuration:
 
 Without `--config`, the long-lived server discovers a project upward. Before a project exists, call `heracles_init`; the server initializes the project and then switches to the fully wired local Control Surface.
 
+### Provider-Specific MCP Setup
+
+Every `heracles plan`, `heracles labor`, and `heracles run` session automatically receives a temporary `heracles` MCP server entry and Heracles's bundled skills (see [Skills](#skills)) for the duration of that session, without overwriting any existing provider configuration. Manual setup below is only needed to use the Heracles MCP server outside a Heracles-launched session.
+
+Claude Code, OpenCode, Kimi Code, and OpenClaw read `.mcp.json` (project) or their global MCP config in the same `mcpServers` shape:
+
+```json
+{
+  "mcpServers": {
+    "heracles": {
+      "command": "heracles",
+      "args": ["mcp", "serve", "--config", "/absolute/path/to/heracles.yaml"]
+    }
+  }
+}
+```
+
+Codex reads `.codex/config.toml` (project) or `~/.codex/config.toml` (global):
+
+```toml
+[mcp_servers.heracles]
+command = "heracles"
+args = ["mcp", "serve", "--config", "/absolute/path/to/heracles.yaml"]
+```
+
+Hermes follows the same `mcpServers` JSON shape as Claude Code; consult its documentation for the config file location.
+
+### Troubleshooting
+
+- Run `heracles doctor` to validate the project, Agent Profiles, and tracker access before starting a Labor.
+- Smoke-test the MCP server directly without a paid provider turn:
+
+  ```sh
+  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}' | heracles mcp serve --config /absolute/path/to/heracles.yaml
+  ```
+
+  A successful response confirms the server starts, finds the Project Configuration, and negotiates the protocol version.
+
+## Skills
+
+Heracles ships three skills used by its own Planning and Issue Stages, kept skills.sh-compatible so they also work outside Heracles-launched sessions:
+
+- `grill-with-docs` - runs the interactive Grilling Session (ADR 0013) that explores Target Repositories and documentation before drafting a PRD.
+- `to-prd-for-heracles` - drafts and publishes the durable PRD Issue (ADR 0014).
+- `to-issues-for-heracles` - converts an approved PRD into Heracles-compatible issue proposals (ADR 0015).
+
+List the bundled skills and detected providers:
+
+```sh
+heracles skills list
+```
+
+Install them into a provider's skill directory, following the `.{provider}/skills` convention skills.sh uses:
+
+```sh
+heracles skills install --project --provider claude
+heracles skills install --global --provider codex
+```
+
+`--provider` may be repeated; if omitted, Heracles installs to every detected provider. Locally modified skills are never overwritten unless `--force` is given. Heracles-launched sessions receive these skills automatically and do not require this command.
+
 ## Heracles-Compatible Issues
 
 The GitHub Issue Tracker uses explicit shared state labels:
