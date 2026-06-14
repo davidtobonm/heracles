@@ -32,6 +32,7 @@ type Capabilities struct {
 // Registry contains the supported provider adapters.
 type Registry struct {
 	adapters map[string]Adapter
+	order    []string
 }
 
 // DefaultRegistry returns the supported v1 provider adapters.
@@ -42,9 +43,10 @@ func DefaultRegistry() Registry {
 		providerAdapter{name: "opencode", executable: "opencode", model: true, variant: true, promptArg: true, build: opencodeInvocation},
 		providerAdapter{name: "kimi", executable: "kimi", model: true, build: kimiInvocation},
 	}
-	registry := Registry{adapters: make(map[string]Adapter, len(adapters))}
-	for _, adapter := range adapters {
+	registry := Registry{adapters: make(map[string]Adapter, len(adapters)), order: make([]string, len(adapters))}
+	for index, adapter := range adapters {
 		registry.adapters[adapter.Name()] = adapter
+		registry.order[index] = adapter.Name()
 	}
 	return registry
 }
@@ -56,6 +58,11 @@ func (r Registry) Adapter(name string) (Adapter, error) {
 		return nil, fmt.Errorf("unsupported provider %q", name)
 	}
 	return adapter, nil
+}
+
+// Names returns the supported provider names in their declared order.
+func (r Registry) Names() []string {
+	return append([]string(nil), r.order...)
 }
 
 type providerAdapter struct {

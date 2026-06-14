@@ -17,9 +17,13 @@ import (
 	"github.com/davidtobonm/heracles/internal/control"
 	"github.com/davidtobonm/heracles/internal/doctor"
 	"github.com/davidtobonm/heracles/internal/install"
+	"github.com/davidtobonm/heracles/internal/issuestage"
 	"github.com/davidtobonm/heracles/internal/mcp"
 	"github.com/davidtobonm/heracles/internal/project"
+	"github.com/davidtobonm/heracles/internal/setup"
+	"github.com/davidtobonm/heracles/internal/tracker"
 	"github.com/davidtobonm/heracles/internal/update"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -487,18 +491,79 @@ func runInit(args []string, stdout, stderr io.Writer, options Options) int {
 		return 2
 	}
 
-	result, err := project.Initialize(context.Background(), project.InitOptions{
+	if *configPath != "" || *tracker != "" || len(repositories) != 0 {
+		result, err := project.Initialize(context.Background(), project.InitOptions{
+			WorkingDirectory: options.WorkingDirectory,
+			ConfigPath:       *configPath,
+			Tracker:          *tracker,
+			Repositories:     repositories,
+		})
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+
+		fmt.Fprintf(stdout, "Initialized Project Configuration at %s\n", result.Path)
+		return 0
+	}
+
+	return runInteractiveInit(stdout, stderr, options)
+}
+
+func runInteractiveInit(stdout, stderr io.Writer, options Options) int {
+	input := options.Input
+	if input == nil {
+		input = os.Stdin
+	}
+	system := options.DoctorSystem
+	if system == nil {
+		system = doctor.OSSystem{}
+	}
+	terminal := func() (int, bool) {
+		file, ok := input.(*os.File)
+		if !ok {
+			return 0, false
+		}
+		fd := int(file.Fd())
+		return fd, term.IsTerminal(fd)
+	}
+
+	ctx := context.Background()
+	result, err := setup.Run(ctx, setup.Options{
 		WorkingDirectory: options.WorkingDirectory,
-		ConfigPath:       *configPath,
-		Tracker:          *tracker,
-		Repositories:     repositories,
+		HomeDirectory:    options.HomeDirectory,
+		IO:               setup.NewIO(input, stdout, terminal),
+		Registry:         agent.DefaultRegistry(),
+		System:           system,
+		Publisher:        issuestage.NewGitHubPublisher(tracker.OSCommandRunner{}),
+		RunBootstrapBacklog: func(ctx context.Context, loaded project.LoadedConfig) error {
+			surface, err := control.NewLocal(ctx, loaded)
+			if err != nil {
+				return err
+			}
+			defer surface.Close()
+			_, err = surface.Execute(ctx, control.Operation{Name: "run"})
+			return err
+		},
 	})
+	if errors.Is(err, setup.ErrCancelled) {
+		fmt.Fprintln(stdout, "cancelled")
+		return 0
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if result.Cancelled {
+		fmt.Fprintln(stdout, "cancelled")
+		return 0
+	}
 
-	fmt.Fprintf(stdout, "Initialized Project Configuration at %s\n", result.Path)
+	fmt.Fprintf(stdout, "Wrote Project Configuration to %s\n", result.Path)
+	fmt.Fprint(stdout, result.Doctor.String())
+	if !result.Doctor.OK {
+		return 1
+	}
 	return 0
 }
 
