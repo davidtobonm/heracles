@@ -107,7 +107,7 @@ func SessionBrief(brief Brief) string {
 - When you reach the Question Budget, stop and ask the user whether you may exceed it or should proceed directly to drafting the PRD with what you already know.
 
 PRD Issue protocol (ADR 0014):
-- Once clarification is complete, use the to-prd skill to draft the PRD.
+- Once clarification is complete, use the to-prd-for-heracles skill to draft the PRD.
 - Publish the PRD as one Issue in the configured Issue Tracker, labeled %q and %q.
 - Embed a SHA-256 revision marker in the Issue body so future revisions of the same Issue can detect drift.
 - After publishing or revising the PRD Issue, run:

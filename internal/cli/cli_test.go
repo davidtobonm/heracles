@@ -989,6 +989,81 @@ func TestVersionReportsBuildMetadata(t *testing.T) {
 	}
 }
 
+func TestSkillsListReportsBundledSkillsAndDetectedProviders(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	exitCode := cli.RunWithOptions([]string{"skills", "list"}, &stdout, &stderr, cli.Options{
+		DoctorSystem: cliFakeSystem{},
+	})
+	if exitCode != 0 {
+		t.Fatalf("RunWithOptions(skills list) exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
+	}
+	for _, expected := range []string{"grill-with-docs", "to-prd-for-heracles", "to-issues-for-heracles", "claude (installed)", "codex (installed)"} {
+		if !strings.Contains(stdout.String(), expected) {
+			t.Errorf("skills list output %q does not contain %q", stdout.String(), expected)
+		}
+	}
+}
+
+func TestSkillsInstallWritesBundledSkillsAndProtectsLocalEdits(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	exitCode := cli.RunWithOptions([]string{"skills", "install", "--project", "--provider", "claude"}, &stdout, &stderr, cli.Options{
+		WorkingDirectory: root,
+		DoctorSystem:     cliFakeSystem{},
+	})
+	if exitCode != 0 {
+		t.Fatalf("RunWithOptions(skills install) exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
+	}
+	skillPath := filepath.Join(root, ".claude", "skills", "grill-with-docs", "SKILL.md")
+	if _, err := os.Stat(skillPath); err != nil {
+		t.Fatalf("Stat(%s) error = %v, want installed skill", skillPath, err)
+	}
+	if !strings.Contains(stdout.String(), "grill-with-docs installed") {
+		t.Errorf("skills install output %q, want installation report", stdout.String())
+	}
+
+	if err := os.WriteFile(skillPath, []byte("local edits"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = cli.RunWithOptions([]string{"skills", "install", "--project", "--provider", "claude"}, &stdout, &stderr, cli.Options{
+		WorkingDirectory: root,
+		DoctorSystem:     cliFakeSystem{},
+	})
+	if exitCode != 0 {
+		t.Fatalf("RunWithOptions(skills install) exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "grill-with-docs skipped") {
+		t.Errorf("skills install output %q, want skipped report for locally modified skill", stdout.String())
+	}
+	contents, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(contents) != "local edits" {
+		t.Errorf("SKILL.md = %q, want local edits preserved", contents)
+	}
+}
+
+func TestSkillsInstallRejectsAmbiguousScope(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	exitCode := cli.RunWithOptions([]string{"skills", "install", "--provider", "claude"}, &stdout, &stderr, cli.Options{
+		WorkingDirectory: t.TempDir(),
+		DoctorSystem:     cliFakeSystem{},
+	})
+	if exitCode != 2 {
+		t.Fatalf("RunWithOptions(skills install) exit code = %d, want 2; stderr = %q", exitCode, stderr.String())
+	}
+}
+
 type cliFakeSystem struct{}
 
 func (cliFakeSystem) LookPath(executable string) (string, error) {

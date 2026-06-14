@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/davidtobonm/heracles/internal/environment"
+	"github.com/davidtobonm/heracles/internal/mcpsession"
 	"github.com/davidtobonm/heracles/internal/redact"
 )
 
@@ -19,6 +20,12 @@ import (
 type Runner struct {
 	registry    Registry
 	environment []string
+
+	// sessionConfigPath and sessionExecutable, when set via WithSession,
+	// cause each launched session's workspace to receive Heracles's bundled
+	// skills and MCP configuration per ADR 0019.
+	sessionConfigPath string
+	sessionExecutable string
 }
 
 // Result is one completed provider invocation.
@@ -38,6 +45,35 @@ func NewRunner(registry Registry, environment []string) Runner {
 	return Runner{registry: registry, environment: append([]string(nil), environment...)}
 }
 
+// WithSession returns a copy of r that prepares each launched session's
+// workspace with Heracles's bundled skills and MCP configuration (per ADR
+// 0019), pointing at configPath via the given Heracles executable. The
+// session workspace is restored to its prior state once the session ends.
+func (r Runner) WithSession(configPath, executable string) Runner {
+	r.sessionConfigPath = configPath
+	r.sessionExecutable = executable
+	return r
+}
+
+// injectSession prepares workspace for provider per WithSession, returning a
+// no-op cleanup if no session configuration was set or injection failed.
+// Injection is best-effort: a launched session never depends on it.
+func (r Runner) injectSession(provider string, workspace string) func() error {
+	if r.sessionConfigPath == "" {
+		return func() error { return nil }
+	}
+	cleanup, err := mcpsession.Inject(mcpsession.Config{
+		Provider:   provider,
+		Workspace:  workspace,
+		ConfigPath: r.sessionConfigPath,
+		Executable: r.sessionExecutable,
+	})
+	if err != nil {
+		return func() error { return nil }
+	}
+	return cleanup
+}
+
 // Run invokes a provider with timeout and environment controls.
 func (r Runner) Run(ctx context.Context, provider string, profile Profile, workspaces []string, prompt string) (Result, error) {
 	adapter, err := r.registry.Adapter(provider)
@@ -48,6 +84,8 @@ func (r Runner) Run(ctx context.Context, provider string, profile Profile, works
 	if err != nil {
 		return Result{}, err
 	}
+
+	defer r.injectSession(provider, workspaces[0])()
 
 	runContext := ctx
 	cancel := func() {}
@@ -107,6 +145,8 @@ func (r Runner) RunInteractive(ctx context.Context, provider string, profile Pro
 	if err != nil {
 		return err
 	}
+
+	defer r.injectSession(provider, workspaces[0])()
 
 	command := exec.CommandContext(ctx, invocation.Command, invocation.Args...)
 	command.Dir = workspaces[0]

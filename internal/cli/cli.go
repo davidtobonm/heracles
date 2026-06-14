@@ -27,6 +27,7 @@ import (
 	"github.com/davidtobonm/heracles/internal/project"
 	"github.com/davidtobonm/heracles/internal/setup"
 	"github.com/davidtobonm/heracles/internal/signal"
+	"github.com/davidtobonm/heracles/internal/skills"
 	"github.com/davidtobonm/heracles/internal/tracker"
 	"github.com/davidtobonm/heracles/internal/update"
 	"golang.org/x/term"
@@ -47,6 +48,7 @@ Available Commands:
   heracles inspect    Inspect one durable workflow record
   heracles status     Report stage, progress, blockers, and resume guidance for a Labor
   heracles mcp serve  Start the stdio MCP Control Surface
+  heracles skills     List or install Heracles's bundled skills
   heracles approve    Approve a Planning or Issue publication gate
   heracles reject     Reject a Planning or Issue publication gate for revision
   heracles retry      Retry a failed or blocked issue attempt
@@ -115,6 +117,10 @@ func RunWithOptions(args []string, stdout, stderr io.Writer, options Options) in
 
 	if args[0] == "mcp" {
 		return runMCP(args[1:], stdout, stderr, options)
+	}
+
+	if args[0] == "skills" {
+		return runSkills(args[1:], stdout, stderr, options)
 	}
 
 	for _, command := range []string{"plan", "issues", "run", "labor", "list", "inspect", "status", "approve", "reject", "retry", "resume", "cancel"} {
@@ -858,6 +864,120 @@ func runDoctor(args []string, stdout, stderr io.Writer, options Options) int {
 	}
 	if !report.OK {
 		return 1
+	}
+	return 0
+}
+
+// runSkills implements `heracles skills list` and `heracles skills install`,
+// per ADR 0019. Installation follows the same .{provider}/skills directory
+// convention skills.sh uses, with overwrite protection for locally modified
+// skills.
+func runSkills(args []string, stdout, stderr io.Writer, options Options) int {
+	const usage = "usage: heracles skills <list|install> [--project|--global] [--provider name]... [--force]"
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, usage)
+		return 2
+	}
+	command := args[0]
+	switch command {
+	case "list", "install":
+	default:
+		fmt.Fprintln(stderr, usage)
+		return 2
+	}
+
+	flags := flag.NewFlagSet("heracles skills "+command, flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	projectScope := flags.Bool("project", false, "install into the project's skill directories")
+	globalScope := flags.Bool("global", false, "install into the user's global skill directories")
+	force := flags.Bool("force", false, "overwrite locally modified skills")
+	var providerNames repeatedString
+	flags.Var(&providerNames, "provider", "target provider; repeat for multiple providers")
+	if err := flags.Parse(args[1:]); errors.Is(err, flag.ErrHelp) {
+		return 0
+	} else if err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintf(stderr, "heracles skills %s does not accept positional arguments\n", command)
+		return 2
+	}
+
+	bundledSkills, err := skills.Bundled()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	system := options.DoctorSystem
+	if system == nil {
+		system = doctor.OSSystem{}
+	}
+	availability := setup.DetectProviders(agent.DefaultRegistry(), system)
+
+	if command == "list" {
+		fmt.Fprintln(stdout, "Bundled skills:")
+		for _, skill := range bundledSkills {
+			fmt.Fprintf(stdout, "  %s - %s\n", skill.Name, skill.Description)
+		}
+		fmt.Fprintln(stdout, "Detected providers:")
+		for _, entry := range availability {
+			status := "not installed"
+			if entry.Available {
+				status = "installed"
+			}
+			fmt.Fprintf(stdout, "  %s (%s)\n", entry.Provider, status)
+		}
+		return 0
+	}
+
+	if *projectScope == *globalScope {
+		fmt.Fprintln(stderr, "heracles skills install requires exactly one of --project or --global")
+		return 2
+	}
+
+	targets := []string(providerNames)
+	if len(targets) == 0 {
+		for _, entry := range availability {
+			if entry.Available {
+				targets = append(targets, entry.Provider)
+			}
+		}
+		if len(targets) == 0 {
+			fmt.Fprintln(stderr, "no supported providers detected; pass --provider <name>")
+			return 1
+		}
+	} else {
+		registry := agent.DefaultRegistry()
+		for _, provider := range targets {
+			if _, err := registry.Adapter(provider); err != nil {
+				fmt.Fprintf(stderr, "unsupported provider %q\n", provider)
+				return 2
+			}
+		}
+	}
+
+	for _, provider := range targets {
+		var dir string
+		if *globalScope {
+			dir = skills.GlobalDir(provider, options.HomeDirectory)
+		} else {
+			dir = skills.ProjectDir(provider, options.WorkingDirectory)
+		}
+		results, err := skills.Install(dir, bundledSkills, *force)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "%s (%s):\n", provider, dir)
+		for _, result := range results {
+			switch {
+			case result.Installed:
+				fmt.Fprintf(stdout, "  %s installed\n", result.Skill)
+			case result.Skipped:
+				fmt.Fprintf(stdout, "  %s skipped (locally modified; use --force to overwrite)\n", result.Skill)
+			}
+		}
 	}
 	return 0
 }
