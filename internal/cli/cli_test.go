@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -648,6 +649,8 @@ func TestListInspectAndOperationsValidateArguments(t *testing.T) {
 		{args: []string{"retry", "attempt-1"}, name: "retry", id: "attempt-1"},
 		{args: []string{"resume", "labor-1"}, name: "resume", id: "labor-1"},
 		{args: []string{"cancel", "labor-1", "--reason", "stop", "--yes"}, name: "cancel", id: "labor-1"},
+		{args: []string{"status"}, name: "status"},
+		{args: []string{"status", "labor-1"}, name: "status", id: "labor-1"},
 	} {
 		var stdout, stderr bytes.Buffer
 		if exit := cli.RunWithOptions(testCase.args, &stdout, &stderr, cli.Options{Control: surface}); exit != 0 {
@@ -797,6 +800,60 @@ agents:
 	for _, expected := range []string{"[ok] GitHub authentication", "[ok] Agent Profiles", "[ok] Target Repository widget"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Errorf("doctor output %q does not contain %q", stdout.String(), expected)
+		}
+	}
+}
+
+func TestDoctorJSONOutputIsStableAndNonInteractive(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	config := `version: 1
+issue_tracker:
+  github: example/widget
+repositories:
+  - name: widget
+    path: .
+    github: example/widget
+    base_branch: main
+agents:
+  default_profile: default
+  profiles:
+    default:
+      provider: codex
+  roles: {}
+`
+	if err := os.WriteFile(filepath.Join(root, "heracles.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("write Project Configuration: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	exitCode := cli.RunWithOptions([]string{"doctor", "--json"}, &stdout, &stderr, cli.Options{
+		WorkingDirectory: root,
+		DoctorSystem:     cliFakeSystem{},
+	})
+	if exitCode != 0 {
+		t.Fatalf("RunWithOptions(doctor --json) exit code = %d, want 0; stderr = %q", exitCode, stderr.String())
+	}
+
+	var report struct {
+		OK     bool `json:"OK"`
+		Checks []struct {
+			Name    string `json:"Name"`
+			OK      bool   `json:"OK"`
+			Warning bool   `json:"Warning"`
+			Message string `json:"Message"`
+		} `json:"Checks"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("doctor --json output is not valid JSON: %v; output = %q", err, stdout.String())
+	}
+	if !report.OK || len(report.Checks) == 0 {
+		t.Errorf("report = %#v, want OK with checks", report)
+	}
+	for _, forbidden := range []string{"Continue", "?", "y/n", "update available"} {
+		if strings.Contains(stdout.String(), forbidden) {
+			t.Errorf("doctor --json output %q contains interactive or update content %q", stdout.String(), forbidden)
 		}
 	}
 }

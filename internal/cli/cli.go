@@ -23,6 +23,7 @@ import (
 	"github.com/davidtobonm/heracles/internal/install"
 	"github.com/davidtobonm/heracles/internal/issuestage"
 	"github.com/davidtobonm/heracles/internal/mcp"
+	"github.com/davidtobonm/heracles/internal/output"
 	"github.com/davidtobonm/heracles/internal/project"
 	"github.com/davidtobonm/heracles/internal/setup"
 	"github.com/davidtobonm/heracles/internal/signal"
@@ -44,6 +45,7 @@ Available Commands:
   heracles labor      Start or resume an end-to-end Labor
   heracles list       List durable Labors, issues, Change Sets, gates, logs, or evidence
   heracles inspect    Inspect one durable workflow record
+  heracles status     Report stage, progress, blockers, and resume guidance for a Labor
   heracles mcp serve  Start the stdio MCP Control Surface
   heracles approve    Approve a Planning or Issue publication gate
   heracles reject     Reject a Planning or Issue publication gate for revision
@@ -115,7 +117,7 @@ func RunWithOptions(args []string, stdout, stderr io.Writer, options Options) in
 		return runMCP(args[1:], stdout, stderr, options)
 	}
 
-	for _, command := range []string{"plan", "issues", "run", "labor", "list", "inspect", "approve", "reject", "retry", "resume", "cancel"} {
+	for _, command := range []string{"plan", "issues", "run", "labor", "list", "inspect", "status", "approve", "reject", "retry", "resume", "cancel"} {
 		if args[0] == command {
 			return runControl(command, args[1:], stdout, stderr, options)
 		}
@@ -225,6 +227,14 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 			return 2
 		}
 		operation.ID = positionals[0]
+	case "status":
+		if len(positionals) > 1 {
+			fmt.Fprintln(stderr, "heracles status accepts at most one Labor ID")
+			return 2
+		}
+		if len(positionals) == 1 {
+			operation.ID = positionals[0]
+		}
 	case "issues":
 		if len(positionals) > 1 {
 			fmt.Fprintln(stderr, "heracles issues accepts at most one PRD Issue URL")
@@ -376,9 +386,7 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 		return 1
 	}
 	if *jsonOutput {
-		encoder := json.NewEncoder(stdout)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(result); err != nil {
+		if err := output.Encode(stdout, result); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -389,7 +397,7 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 		fmt.Fprintf(stdout, " %s", result.ID)
 	}
 	fmt.Fprintf(stdout, ": %s\n", result.Status)
-	if result.Data != nil && (command == "list" || command == "inspect") {
+	if result.Data != nil && (command == "list" || command == "inspect" || command == "status") {
 		contents, _ := json.MarshalIndent(result.Data, "", "  ")
 		fmt.Fprintf(stdout, "%s\n", contents)
 	}
@@ -805,6 +813,7 @@ func runDoctor(args []string, stdout, stderr io.Writer, options Options) int {
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "select Project Configuration path")
 	fix := flags.Bool("fix", false, "perform safe repairs for missing Tracker labels and the Issue Workspace root")
+	jsonOutput := flags.Bool("json", false, "emit stable machine-readable JSON")
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return 0
 	} else if err != nil {
@@ -839,7 +848,14 @@ func runDoctor(args []string, stdout, stderr io.Writer, options Options) int {
 	} else {
 		report = doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
 	}
-	fmt.Fprint(stdout, report.String())
+	if *jsonOutput {
+		if err := output.Encode(stdout, report); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	} else {
+		fmt.Fprint(stdout, report.String())
+	}
 	if !report.OK {
 		return 1
 	}
