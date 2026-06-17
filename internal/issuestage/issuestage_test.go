@@ -33,6 +33,32 @@ func TestIssueStageAuthorsTracerBulletProposalsAndPausesForApproval(t *testing.T
 	}
 }
 
+func TestBodyRendersStatedTDDExemptionReason(t *testing.T) {
+	t.Parallel()
+
+	proposal := issuestage.Proposal{
+		ID: "api", Title: "Deliver API slice", Type: issuestage.TypeAFK, UserStories: []int{1},
+		WhatToBuild: "Deliver one end-to-end API slice.", AcceptanceCriteria: []string{"Request succeeds"},
+		TDDExemptionReason: "Pure configuration change with no executable behavior.",
+	}
+
+	body := issuestage.Body(proposal)
+
+	if !strings.Contains(body, "Pure configuration change with no executable behavior.") {
+		t.Errorf("body = %q, want the stated exemption reason", body)
+	}
+}
+
+func TestBodyRendersNotExemptWhenNoTDDExemptionReason(t *testing.T) {
+	t.Parallel()
+
+	body := issuestage.Body(proposals()[0])
+
+	if !strings.Contains(body, "Not exempt; Red and Green Evidence required.") {
+		t.Errorf("body = %q, want an explicit non-exemption notice", body)
+	}
+}
+
 func TestIssuePublicationRequiresApprovalAndIsIdempotentlyResumable(t *testing.T) {
 	t.Parallel()
 
@@ -60,7 +86,7 @@ func TestIssuePublicationRequiresApprovalAndIsIdempotentlyResumable(t *testing.T
 		t.Fatalf("published state = %#v, inputs = %#v", state, publisher.inputs)
 	}
 	for _, input := range publisher.inputs {
-		for _, section := range []string{"## Type", "## User stories covered", "## What to build", "## Acceptance criteria", "## Blocked by", "## Exclusive Scopes"} {
+		for _, section := range []string{"## Type", "## User stories covered", "## What to build", "## Acceptance criteria", "## TDD Exemption", "## Blocked by", "## Exclusive Scopes"} {
 			if !strings.Contains(input.Body, section) {
 				t.Errorf("issue body missing %q: %s", section, input.Body)
 			}

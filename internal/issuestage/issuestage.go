@@ -290,6 +290,10 @@ func Body(proposal Proposal) string {
 
 %s
 
+## TDD Exemption
+
+%s
+
 ## Blocked by
 
 %s
@@ -297,7 +301,8 @@ func Body(proposal Proposal) string {
 ## Exclusive Scopes
 
 %s
-`, proposal.Type, numbers(proposal.UserStories), proposal.WhatToBuild, bullets(proposal.AcceptanceCriteria), bullets(proposal.BlockedBy), bullets(proposal.ExclusiveScopes))
+`, proposal.Type, numbers(proposal.UserStories), proposal.WhatToBuild, bullets(proposal.AcceptanceCriteria),
+		tddExemption(proposal.TDDExemptionReason), bullets(proposal.BlockedBy), bullets(proposal.ExclusiveScopes))
 }
 
 func numbers(values []int) string {
@@ -317,4 +322,14 @@ func bullets(values []string) string {
 		lines[index] = "- " + value
 	}
 	return strings.Join(lines, "\n")
+}
+
+// tddExemption renders the Issue Author's stated rationale for exempting a
+// proposal from Red and Green Evidence, or an explicit non-exemption notice
+// when reason is empty, per skills/to-issues-for-heracles/SKILL.md.
+func tddExemption(reason string) string {
+	if reason == "" {
+		return "Not exempt; Red and Green Evidence required."
+	}
+	return reason
 }

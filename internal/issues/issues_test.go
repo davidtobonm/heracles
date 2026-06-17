@@ -99,6 +99,32 @@ func validProposal() issues.Proposal {
 	}
 }
 
+func TestBodyRendersStatedTDDExemptionReason(t *testing.T) {
+	t.Parallel()
+
+	proposal := validProposal()
+	proposal.TDDExemptionReason = "Pure configuration change with no executable behavior."
+
+	body := issues.Body(proposal, parentPRDURL, "revision", nil)
+
+	if !strings.Contains(body, "## TDD Exemption") {
+		t.Fatalf("body = %q, want a TDD Exemption section", body)
+	}
+	if !strings.Contains(body, "Pure configuration change with no executable behavior.") {
+		t.Errorf("body = %q, want the stated exemption reason", body)
+	}
+}
+
+func TestBodyRendersNotExemptWhenNoTDDExemptionReason(t *testing.T) {
+	t.Parallel()
+
+	body := issues.Body(validProposal(), parentPRDURL, "revision", nil)
+
+	if !strings.Contains(body, "Not exempt; Red and Green Evidence required.") {
+		t.Errorf("body = %q, want an explicit non-exemption notice", body)
+	}
+}
+
 func TestGeneratePublishesNewProposals(t *testing.T) {
 	t.Parallel()
 
