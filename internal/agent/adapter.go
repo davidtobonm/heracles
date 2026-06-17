@@ -169,7 +169,7 @@ func codexInvocation(profile Profile, workspaces []string, prompt string) Invoca
 }
 
 func codexInteractiveInvocation(profile Profile, workspaces []string, prompt string) Invocation {
-	args := []string{"--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C", workspaces[0]}
+	args := []string{"--dangerously-bypass-approvals-and-sandbox", "-C", workspaces[0]}
 	if profile.Model != "" {
 		args = append(args, "-m", profile.Model)
 	}
