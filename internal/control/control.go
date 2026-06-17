@@ -4,6 +4,8 @@ package control
 import (
 	"context"
 	"errors"
+
+	"github.com/davidtobonm/heracles/internal/project"
 )
 
 // Operation is one typed Control Surface request shared by CLI and MCP.
@@ -22,6 +24,11 @@ type Operation struct {
 	// RetryUntilPass permits unbounded correction cycles for trusted,
 	// unattended launches, per PRD.md's correction-cycle policy.
 	RetryUntilPass bool `json:"retry_until_pass,omitempty"`
+	// RoleOverrides carries CLI-launch-only Agent Role profile overrides
+	// (e.g. --issue_author-model) so `heracles issues <prd-issue-url>` can
+	// forward them to its background-respawned subprocess. Not part of the
+	// CLI/MCP wire contract.
+	RoleOverrides map[string]project.ProfileConfig `json:"-"`
 }
 
 // Result is one stable machine-readable Control Surface outcome.

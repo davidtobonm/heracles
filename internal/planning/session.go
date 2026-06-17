@@ -7,6 +7,7 @@ import (
 
 	"github.com/davidtobonm/heracles/internal/agent"
 	"github.com/davidtobonm/heracles/internal/prd"
+	"github.com/davidtobonm/heracles/internal/project"
 )
 
 // ErrSessionNotFound indicates that no durable interactive Planning session
@@ -41,9 +42,10 @@ type InteractiveRunner interface {
 }
 
 // IssueGenerator launches background, non-interactive issue generation for
-// an approved PRD Issue, per ADR 0015.
+// an approved PRD Issue, per ADR 0015. overrides carries launch-only Agent
+// Role profile overrides to forward to the background process, if any.
 type IssueGenerator interface {
-	Generate(ctx context.Context, id, prdIssueURL, prdPath string) error
+	Generate(ctx context.Context, id, prdIssueURL, prdPath string, overrides map[string]project.ProfileConfig) error
 }
 
 // SessionRequest starts or resumes an interactive Planning session.
@@ -210,7 +212,7 @@ func (service SessionService) startIssueGeneration(ctx context.Context, state *S
 	if state.Status != StatusApproved || state.IssuesStarted || state.PRDPath == "" || state.PRDIssueURL == "" || service.Generator == nil {
 		return nil
 	}
-	if err := service.Generator.Generate(ctx, state.ID, state.PRDIssueURL, state.PRDPath); err != nil {
+	if err := service.Generator.Generate(ctx, state.ID, state.PRDIssueURL, state.PRDPath, nil); err != nil {
 		return fmt.Errorf("launch background issue generation: %w", err)
 	}
 	state.IssuesStarted = true

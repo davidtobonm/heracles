@@ -333,6 +333,13 @@ func runControl(command string, args []string, stdout, stderr io.Writer, options
 			return 2
 		}
 	}
+	if command == "issues" && len(overrides) > 0 {
+		// Forwarded to backgroundIssueGenerator so the respawned background
+		// `heracles issues` subprocess (which reloads config from disk and
+		// would otherwise lose these launch-only overrides) applies the
+		// same Agent Role profile as this invocation.
+		operation.RoleOverrides = overrides
+	}
 	surface, owned, err := controlSurface(options, *configPath, overrides)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
