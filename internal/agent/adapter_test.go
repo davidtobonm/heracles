@@ -177,6 +177,23 @@ func TestProviderAdaptersBuildInteractiveInvocationsWithThePromptAsTheInitialMes
 	}
 }
 
+func TestCodexInteractiveInvocationOmitsExecOnlyFlags(t *testing.T) {
+	t.Parallel()
+
+	registry := agent.DefaultRegistry()
+	adapter, err := registry.Adapter("codex")
+	if err != nil {
+		t.Fatalf("Adapter() error = %v", err)
+	}
+	invocation, err := adapter.InteractiveInvocation(agent.Profile{}, []string{"/workspace"}, "let's plan")
+	if err != nil {
+		t.Fatalf("InteractiveInvocation() error = %v", err)
+	}
+	if slices.Contains(invocation.Args, "--skip-git-repo-check") {
+		t.Errorf("args = %#v, want no --skip-git-repo-check; that flag belongs to `codex exec`, not the top-level interactive command", invocation.Args)
+	}
+}
+
 func TestProviderCapabilitiesRejectUnsupportedSettings(t *testing.T) {
 	t.Parallel()
 
