@@ -220,6 +220,90 @@ func TestRunExistingProjectRepairPublishesBootstrap(t *testing.T) {
 	}
 }
 
+func TestRunExistingProjectRepairPublishesBootstrapWithDetectedStack(t *testing.T) {
+	t.Parallel()
+
+	// pubspec.yaml identifies a Dart/Flutter stack for the Bootstrap proposal
+	// text, but isn't recognized by DetectVerification, so the repository
+	// stays under-verified and reaches the bootstrap path (unlike go.mod,
+	// which DetectVerification always resolves to confident commands for).
+	dir := newGitRepo(t, false)
+	writeFile(t, dir, "pubspec.yaml", "name: daily_water\n")
+	if _, err := project.Initialize(context.Background(), project.InitOptions{WorkingDirectory: dir}); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	io, _ := newSetupIO("3\nn\n")
+	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true, "gofmt": true, "go": true}}
+	publisher := &fakePublisher{}
+
+	if _, err := setup.Run(context.Background(), setup.Options{
+		WorkingDirectory: dir,
+		HomeDirectory:    t.TempDir(),
+		IO:               io,
+		Registry:         agent.DefaultRegistry(),
+		System:           system,
+		Publisher:        publisher,
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(publisher.created) != 2 {
+		t.Fatalf("created %d issues, want 2 (PRD + 1 proposal)", len(publisher.created))
+	}
+	if !strings.Contains(publisher.created[1].Body, "Dart/Flutter") {
+		t.Errorf("proposal body = %q, want it to mention the detected Dart/Flutter stack", publisher.created[1].Body)
+	}
+}
+
+func TestRunExistingProjectRepairSkipsBootstrapForRepositoryWithoutFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := newGitRepo(t, false)
+	result, err := project.Initialize(context.Background(), project.InitOptions{WorkingDirectory: dir})
+	if err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	loaded, err := project.Load(result.Path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	emptyRepoDir := filepath.Join(dir, "empty-service")
+	if err := os.MkdirAll(emptyRepoDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	// Mark the root repository already verified so it's excluded from the
+	// repair's verification-detection and bootstrap loops, leaving only the
+	// empty repository below under test.
+	loaded.Config.Repositories[0].Verify = []string{"true"}
+	loaded.Config.Repositories = append(loaded.Config.Repositories, project.RepositoryConfig{
+		Name: "empty-service", Path: "empty-service", GitHub: "acme/empty-service", BaseBranch: "main",
+	})
+	if err := project.WriteConfig(loaded.Path, loaded.Config); err != nil {
+		t.Fatalf("WriteConfig() error = %v", err)
+	}
+
+	io, out := newSetupIO("3\n")
+	system := fakeDoctorSystem{installed: map[string]bool{"git": true, "gh": true, "codex": true, "gofmt": true, "go": true}}
+	publisher := &fakePublisher{}
+
+	if _, err := setup.Run(context.Background(), setup.Options{
+		WorkingDirectory: dir,
+		HomeDirectory:    t.TempDir(),
+		IO:               io,
+		Registry:         agent.DefaultRegistry(),
+		System:           system,
+		Publisher:        publisher,
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(publisher.created) != 0 {
+		t.Errorf("created %d issues, want 0 since the only under-verified repository has no files", len(publisher.created))
+	}
+	if !strings.Contains(out.String(), "empty-service") || !strings.Contains(out.String(), "no files yet") {
+		t.Errorf("output = %q, want a message explaining the bootstrap was skipped for empty-service", out.String())
+	}
+}
+
 func TestRunExistingProjectRepairRunsBootstrapBacklogWhenAccepted(t *testing.T) {
 	t.Parallel()
 

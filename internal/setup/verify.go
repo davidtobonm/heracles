@@ -121,6 +121,54 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+// DetectStack names the project's primary language/framework from common
+// marker files, for use in human-readable text such as the Heracles Project
+// Bootstrap proposal. It returns "" when no recognized stack is found.
+func DetectStack(repoPath string) string {
+	switch {
+	case fileExists(filepath.Join(repoPath, "pubspec.yaml")):
+		return "Dart/Flutter"
+	case fileExists(filepath.Join(repoPath, "go.mod")):
+		return "Go"
+	case fileExists(filepath.Join(repoPath, "package.json")):
+		return "Node.js"
+	case fileExists(filepath.Join(repoPath, "pyproject.toml")), fileExists(filepath.Join(repoPath, "requirements.txt")):
+		return "Python"
+	case fileExists(filepath.Join(repoPath, "Cargo.toml")):
+		return "Rust"
+	case fileExists(filepath.Join(repoPath, "pom.xml")):
+		return "Java (Maven)"
+	case fileExists(filepath.Join(repoPath, "build.gradle")), fileExists(filepath.Join(repoPath, "build.gradle.kts")):
+		return "Java/Kotlin (Gradle)"
+	case fileExists(filepath.Join(repoPath, "Gemfile")):
+		return "Ruby"
+	case fileExists(filepath.Join(repoPath, "composer.json")):
+		return "PHP"
+	default:
+		return ""
+	}
+}
+
+// RepositoryHasFiles reports whether repoPath contains any tracked-looking
+// file beyond version-control and Heracles housekeeping directories. A
+// repository with no files yet (a brand-new, still-empty project) has no
+// existing code for the Heracles Project Bootstrap to add checks to.
+func RepositoryHasFiles(repoPath string) bool {
+	entries, err := os.ReadDir(repoPath)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		switch entry.Name() {
+		case ".git", ".heracles":
+			continue
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 var makeTargetPattern = regexp.MustCompile(`(?m)^([A-Za-z0-9_.-]+):`)
 
 func hasMakeTarget(path, target string) bool {

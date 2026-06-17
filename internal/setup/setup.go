@@ -242,12 +242,22 @@ func chooseVerification(io IO, configDir string, config *project.Config, complet
 // issues for repositories with no verification commands, optionally running
 // the resulting Defined Backlog immediately.
 func bootstrapUnderVerified(ctx context.Context, io IO, options Options, loaded project.LoadedConfig) error {
+	configDir := filepath.Dir(loaded.Path)
 	var proposals []issuestage.Proposal
 	for _, repository := range loaded.Config.Repositories {
 		if len(repository.Verify) > 0 {
 			continue
 		}
-		proposals = append(proposals, BuildBootstrapProposal(repository, ""))
+
+		repoPath := repository.Path
+		if !filepath.IsAbs(repoPath) {
+			repoPath = filepath.Join(configDir, repoPath)
+		}
+		if !RepositoryHasFiles(repoPath) {
+			fmt.Fprintf(io.Out, "Skipping Heracles Project Bootstrap for %s: repository has no files yet.\n", repository.Name)
+			continue
+		}
+		proposals = append(proposals, BuildBootstrapProposal(repository, DetectStack(repoPath)))
 	}
 	if len(proposals) == 0 {
 		return nil

@@ -27,3 +27,6 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Local working notes
+/SMOKE_TEST_BUGS.md
