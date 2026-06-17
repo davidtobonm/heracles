@@ -2,8 +2,10 @@ package control
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +15,9 @@ import (
 	"github.com/davidtobonm/heracles/internal/implementation"
 	"github.com/davidtobonm/heracles/internal/issues"
 	"github.com/davidtobonm/heracles/internal/labor"
+	"github.com/davidtobonm/heracles/internal/lock"
 	"github.com/davidtobonm/heracles/internal/planning"
+	"github.com/davidtobonm/heracles/internal/project"
 	"github.com/davidtobonm/heracles/internal/status"
 	"github.com/davidtobonm/heracles/internal/tracker"
 	"github.com/davidtobonm/heracles/internal/workspace"
@@ -105,11 +109,17 @@ func (runner *fakeInteractiveRunner) RunInteractive(_ context.Context, _ agent.P
 }
 
 type fakeIssueGenerator struct {
-	calls []struct{ id, prdIssueURL, prdPath string }
+	calls []struct {
+		id, prdIssueURL, prdPath string
+		overrides                map[string]project.ProfileConfig
+	}
 }
 
-func (generator *fakeIssueGenerator) Generate(_ context.Context, id, prdIssueURL, prdPath string) error {
-	generator.calls = append(generator.calls, struct{ id, prdIssueURL, prdPath string }{id, prdIssueURL, prdPath})
+func (generator *fakeIssueGenerator) Generate(_ context.Context, id, prdIssueURL, prdPath string, overrides map[string]project.ProfileConfig) error {
+	generator.calls = append(generator.calls, struct {
+		id, prdIssueURL, prdPath string
+		overrides                map[string]project.ProfileConfig
+	}{id, prdIssueURL, prdPath, overrides})
 	return nil
 }
 
@@ -241,6 +251,147 @@ func TestExecuteIssuesStartsBackgroundGenerationForApprovedPRDIssue(t *testing.T
 	}
 	if !strings.Contains(string(contents), "Build it.") {
 		t.Errorf("approved PRD mirror = %q, want approved PRD Issue body", contents)
+	}
+}
+
+func TestExecuteIssuesRejectsConcurrentGenerationForSameID(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	local := &Local{root: root}
+
+	held, err := lock.Acquire(local.issueGenerationLockPath("prd-acme-app-9"), "prd-acme-app-9", nil)
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	defer func() { _ = held.Release() }()
+
+	_, err = local.Execute(context.Background(), Operation{
+		Name: "issues", ID: "prd-acme-app-9", PRD: "# PRD", PRDIssueURL: "https://github.com/acme/app/issues/9",
+	})
+	if err == nil {
+		t.Fatal("Execute(issues) error = nil, want error for a concurrent in-flight generation run")
+	}
+	if !errors.Is(err, lock.ErrHeld) {
+		t.Errorf("Execute(issues) error = %v, want errors.Is(..., lock.ErrHeld)", err)
+	}
+}
+
+func TestExecuteIssuesReleasesLockAfterGeneration(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	local := &Local{root: root, trackerRepo: "acme/backlog", issuesService: issues.Service{
+		Author:  fakeIssueAuthor{},
+		Tracker: fakeIssueTracker{},
+		Store:   issues.NewFileStore(root),
+	}}
+
+	if _, err := local.Execute(context.Background(), Operation{
+		Name: "issues", ID: "prd-acme-app-9", PRD: "# PRD", PRDIssueURL: "https://github.com/acme/app/issues/9",
+	}); err != nil {
+		t.Fatalf("Execute(issues) error = %v", err)
+	}
+
+	if _, err := os.Stat(local.issueGenerationLockPath("prd-acme-app-9")); !os.IsNotExist(err) {
+		t.Errorf("lock file stat err = %v, want it removed after generation completes", err)
+	}
+}
+
+type fakeIssueAuthor struct{}
+
+func (fakeIssueAuthor) Propose(context.Context, issues.AuthorRequest) (issues.AuthorResponse, error) {
+	return issues.AuthorResponse{Blocked: "missing user stories"}, nil
+}
+
+type fakeIssueTracker struct{}
+
+func (fakeIssueTracker) ListOpenIssues(context.Context, string) ([]tracker.Issue, error) {
+	return nil, nil
+}
+
+func (fakeIssueTracker) CreateIssue(context.Context, string, string, string, []string) (string, error) {
+	return "", nil
+}
+
+func (fakeIssueTracker) UpdateIssue(context.Context, tracker.Reference, string, string, []string) error {
+	return nil
+}
+
+func (fakeIssueTracker) SetLabels(context.Context, tracker.Reference, []string) error {
+	return nil
+}
+
+func (fakeIssueTracker) Comment(context.Context, tracker.Reference, string) error {
+	return nil
+}
+
+func TestIssueGenerationArgsForwardsRoleOverrides(t *testing.T) {
+	t.Parallel()
+
+	args := issueGenerationArgs("prd-acme-app-9", "/path/PRD.md", "https://github.com/acme/app/issues/9", "/path/heracles.yaml", map[string]project.ProfileConfig{
+		"issue_author": {Provider: "codex", Model: "gpt-5.4", Effort: "high"},
+	})
+
+	want := []string{
+		"issues", "--id", "prd-acme-app-9", "--prd", "/path/PRD.md", "--prd-issue", "https://github.com/acme/app/issues/9",
+		"--issue_author", "codex", "--issue_author-model", "gpt-5.4", "--issue_author-effort", "high",
+		"--config", "/path/heracles.yaml",
+	}
+	if len(args) != len(want) {
+		t.Fatalf("issueGenerationArgs() = %#v, want %#v", args, want)
+	}
+	for index := range want {
+		if args[index] != want[index] {
+			t.Fatalf("issueGenerationArgs() = %#v, want %#v", args, want)
+		}
+	}
+}
+
+func TestIssueGenerationArgsOmitsEmptyOverrideFields(t *testing.T) {
+	t.Parallel()
+
+	args := issueGenerationArgs("prd-acme-app-9", "/path/PRD.md", "https://github.com/acme/app/issues/9", "", map[string]project.ProfileConfig{
+		"issue_author": {Effort: "high"},
+	})
+
+	want := []string{
+		"issues", "--id", "prd-acme-app-9", "--prd", "/path/PRD.md", "--prd-issue", "https://github.com/acme/app/issues/9",
+		"--issue_author-effort", "high",
+	}
+	if len(args) != len(want) {
+		t.Fatalf("issueGenerationArgs() = %#v, want %#v", args, want)
+	}
+	for index := range want {
+		if args[index] != want[index] {
+			t.Fatalf("issueGenerationArgs() = %#v, want %#v", args, want)
+		}
+	}
+}
+
+func TestExecuteIssuesForwardsRoleOverridesToBackgroundGenerator(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeIssueTrackerRunner{output: `{"number":9,"title":"PRD","body":"# PRD\n\nBuild it.","url":"https://github.com/acme/backlog/issues/9","createdAt":"2026-01-01T00:00:00Z","state":"OPEN","labels":[{"name":"heracles:prd"},{"name":"heracles:approved"}]}`}
+	generator := &fakeIssueGenerator{}
+	root := t.TempDir()
+	local := &Local{root: root, trackerClient: tracker.NewGitHubClient(runner), issueGenerator: generator}
+
+	overrides := map[string]project.ProfileConfig{
+		"issue_author": {Provider: "codex", Model: "gpt-5.4", Effort: "high"},
+	}
+	if _, err := local.Execute(context.Background(), Operation{
+		Name: "issues", PRDIssueURL: "https://github.com/acme/backlog/issues/9", RoleOverrides: overrides,
+	}); err != nil {
+		t.Fatalf("Execute(issues) error = %v", err)
+	}
+	if len(generator.calls) != 1 {
+		t.Fatalf("Generate() calls = %#v, want one background call", generator.calls)
+	}
+	got := generator.calls[0].overrides["issue_author"]
+	want := overrides["issue_author"]
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Generate() overrides = %#v, want %#v", got, want)
 	}
 }
 

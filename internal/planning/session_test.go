@@ -8,6 +8,7 @@ import (
 
 	"github.com/davidtobonm/heracles/internal/agent"
 	"github.com/davidtobonm/heracles/internal/planning"
+	"github.com/davidtobonm/heracles/internal/project"
 )
 
 type recordingInteractiveRunner struct {
@@ -28,7 +29,7 @@ type recordingIssueGenerator struct {
 	err   error
 }
 
-func (generator *recordingIssueGenerator) Generate(_ context.Context, id, prdIssueURL, prdPath string) error {
+func (generator *recordingIssueGenerator) Generate(_ context.Context, id, prdIssueURL, prdPath string, _ map[string]project.ProfileConfig) error {
 	generator.calls = append(generator.calls, struct{ id, prdIssueURL, prdPath string }{id, prdIssueURL, prdPath})
 	return generator.err
 }

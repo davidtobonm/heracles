@@ -20,6 +20,7 @@ import (
 	"github.com/davidtobonm/heracles/internal/issues"
 	"github.com/davidtobonm/heracles/internal/issuestage"
 	"github.com/davidtobonm/heracles/internal/labor"
+	"github.com/davidtobonm/heracles/internal/lock"
 	"github.com/davidtobonm/heracles/internal/planning"
 	"github.com/davidtobonm/heracles/internal/prd"
 	"github.com/davidtobonm/heracles/internal/project"
@@ -184,9 +185,14 @@ func (local *Local) Execute(ctx context.Context, operation Operation) (Result, e
 		return result(operation, state.Status, state), err
 	case "issues":
 		if operation.ID == "" {
-			state, err := local.generateIssuesForPRDIssue(ctx, operation.PRDIssueURL)
+			state, err := local.generateIssuesForPRDIssue(ctx, operation.PRDIssueURL, operation.RoleOverrides)
 			return result(operation, state.Status, state), err
 		}
+		generationLock, err := lock.Acquire(local.issueGenerationLockPath(operation.ID), operation.ID, nil)
+		if err != nil {
+			return Result{}, fmt.Errorf("heracles issues %q: %w", operation.ID, err)
+		}
+		defer func() { _ = generationLock.Release() }()
 		state, err := local.issuesService.Generate(ctx, issues.GenerateRequest{
 			ID: operation.ID, ParentPRDURL: operation.PRDIssueURL, ApprovedPRD: operation.PRD, TrackerRepository: local.trackerRepository(),
 		})
@@ -568,7 +574,7 @@ func (local *Local) repositoryContexts() []planning.RepositoryContext {
 // generateIssuesForPRDIssue starts background issue generation for one
 // approved PRD Issue and returns immediately, per ADR 0024's standalone
 // `heracles issues <prd-issue-url>` form.
-func (local *Local) generateIssuesForPRDIssue(ctx context.Context, prdIssueURL string) (issues.State, error) {
+func (local *Local) generateIssuesForPRDIssue(ctx context.Context, prdIssueURL string, overrides map[string]project.ProfileConfig) (issues.State, error) {
 	if prdIssueURL == "" {
 		return issues.State{}, errors.New("heracles issues requires a published PRD Issue URL")
 	}
@@ -591,10 +597,19 @@ func (local *Local) generateIssuesForPRDIssue(ctx context.Context, prdIssueURL s
 	if err := os.WriteFile(prdPath, []byte(issue.Body), 0o644); err != nil {
 		return issues.State{}, fmt.Errorf("write approved PRD mirror: %w", err)
 	}
-	if err := local.issueGenerator.Generate(ctx, id, prdIssueURL, prdPath); err != nil {
+	if err := local.issueGenerator.Generate(ctx, id, prdIssueURL, prdPath, overrides); err != nil {
 		return issues.State{}, err
 	}
 	return issues.State{ID: id, ParentPRDURL: prdIssueURL, Status: issues.StatusStarted}, nil
+}
+
+// issueGenerationLockPath returns the per-ID cross-process lock path
+// serializing concurrent issue generation runs for the same approved PRD
+// revision, since the explicit `--id`/`--prd`/`--prd-issue` form of
+// `heracles issues` can be invoked directly or re-entered by
+// backgroundIssueGenerator's respawned subprocess.
+func (local *Local) issueGenerationLockPath(id string) string {
+	return filepath.Join(local.root, ".heracles", "issues", id, "generate.lock")
 }
 
 // backgroundIssueGenerator launches `heracles issues` as a detached
@@ -606,15 +621,45 @@ type backgroundIssueGenerator struct {
 	root       string
 }
 
-func (generator backgroundIssueGenerator) Generate(_ context.Context, id, prdIssueURL, prdPath string) error {
+// issueGenerationArgs builds the respawned `heracles issues` subprocess's
+// argument list, forwarding any launch-only Agent Role profile overrides
+// (e.g. --issue_author-model) the parent invocation received, since the
+// subprocess reloads its Project Configuration and preferences from disk and
+// has no other way to see them.
+func issueGenerationArgs(id, prdPath, prdIssueURL, configPath string, overrides map[string]project.ProfileConfig) []string {
+	args := []string{"issues", "--id", id, "--prd", prdPath, "--prd-issue", prdIssueURL}
+	roles := make([]string, 0, len(overrides))
+	for role := range overrides {
+		roles = append(roles, role)
+	}
+	slices.Sort(roles)
+	for _, role := range roles {
+		profile := overrides[role]
+		if profile.Provider != "" {
+			args = append(args, "--"+role, profile.Provider)
+		}
+		if profile.Model != "" {
+			args = append(args, "--"+role+"-model", profile.Model)
+		}
+		if profile.Effort != "" {
+			args = append(args, "--"+role+"-effort", profile.Effort)
+		}
+		if profile.Variant != "" {
+			args = append(args, "--"+role+"-variant", profile.Variant)
+		}
+	}
+	if configPath != "" {
+		args = append(args, "--config", configPath)
+	}
+	return args
+}
+
+func (generator backgroundIssueGenerator) Generate(_ context.Context, id, prdIssueURL, prdPath string, overrides map[string]project.ProfileConfig) error {
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate heracles executable: %w", err)
 	}
-	args := []string{"issues", "--id", id, "--prd", prdPath, "--prd-issue", prdIssueURL}
-	if generator.configPath != "" {
-		args = append(args, "--config", generator.configPath)
-	}
+	args := issueGenerationArgs(id, prdPath, prdIssueURL, generator.configPath, overrides)
 	logPath := filepath.Join(generator.root, ".heracles", "planning", id, "issues.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return fmt.Errorf("create issue generation log directory: %w", err)
