@@ -2,6 +2,7 @@ package implementation_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -58,6 +59,59 @@ func TestConfiguredImplementerAcceptsFencedJSON(t *testing.T) {
 	if !strings.Contains(strings.Join(runner.profile.ExtraArgs, " "), "--json-schema") {
 		t.Errorf("implementer profile extra args = %#v, want claude schema flags", runner.profile.ExtraArgs)
 	}
+}
+
+func TestConfiguredImplementerPromptIncludesEvidenceTimestamps(t *testing.T) {
+	t.Parallel()
+
+	issueWorkspace := workspace.Workspace{Repositories: []workspace.Worktree{{Path: "/backend"}}}
+	runner := &roleRunner{result: agent.Result{Final: `{"changes":"done","evidence_policy":{"Exempt":true,"Reason":"docs only"}}`}}
+	if _, err := (implementation.AgentImplementer{Runner: runner, Profile: agent.Profile{Provider: "codex"}}).Implement(context.Background(), implementation.ImplementContext{Workspace: issueWorkspace}); err != nil {
+		t.Fatalf("Implement() error = %v", err)
+	}
+	if !strings.Contains(runner.prompt, "started_at") || !strings.Contains(runner.prompt, "finished_at") {
+		t.Errorf("implementer prompt omits evidence timestamp fields: %s", runner.prompt)
+	}
+}
+
+// TestNonClaudeProviderExampleEvidenceSatisfiesValidateEvidence proves that a
+// non-Claude provider (which has no JSON-Schema enforcement and only ever
+// sees the prompt's free-text example) cannot be misled into omitting
+// started_at/finished_at: copying the example evidence verbatim must pass
+// delivery.ValidateEvidence's timing gate.
+func TestNonClaudeProviderExampleEvidenceSatisfiesValidateEvidence(t *testing.T) {
+	t.Parallel()
+
+	issueWorkspace := workspace.Workspace{Repositories: []workspace.Worktree{{Path: "/backend"}}}
+	runner := &roleRunner{}
+	if _, err := (implementation.AgentImplementer{Runner: runner, Profile: agent.Profile{Provider: "codex"}}).Implement(context.Background(), implementation.ImplementContext{Workspace: issueWorkspace}); err == nil {
+		t.Fatalf("expected decode error from empty runner result, got nil")
+	}
+
+	example := extractPromptExampleJSON(t, runner.prompt)
+
+	var parsed implementation.ImplementationResult
+	if err := json.Unmarshal([]byte(example), &parsed); err != nil {
+		t.Fatalf("failed to parse prompt example JSON: %v\nexample: %s", err, example)
+	}
+	if err := delivery.ValidateEvidence(parsed.EvidencePolicy, parsed.Evidence); err != nil {
+		t.Errorf("ValidateEvidence() rejected the prompt's own example evidence: %v\nexample: %s", err, example)
+	}
+}
+
+// extractPromptExampleJSON pulls the single-line JSON example out of the
+// Implementer prompt text (the line beginning with the "changes" example
+// object), so the regression test exercises exactly what the model is shown.
+func extractPromptExampleJSON(t *testing.T, prompt string) string {
+	t.Helper()
+	for _, line := range strings.Split(prompt, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, `{"changes"`) {
+			return trimmed
+		}
+	}
+	t.Fatalf("could not find example JSON line in prompt: %s", prompt)
+	return ""
 }
 
 type roleRunner struct {

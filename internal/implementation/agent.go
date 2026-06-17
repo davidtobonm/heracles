@@ -41,8 +41,9 @@ func (implementer AgentImplementer) Implement(ctx context.Context, implementCont
 Implement the issue in the provided isolated worktrees. Work test-first and return auditable Red Evidence followed by Green Evidence unless the issue has a reasoned TDD Exemption.
 Your final assistant message must be exactly one JSON object with no markdown fences and no surrounding commentary.
 Use only these top-level fields: changes, evidence, evidence_policy.
+Each evidence entry requires started_at and finished_at as RFC3339 timestamps reflecting when you actually ran that command. Red Evidence must finish before Green Evidence starts.
 Example:
-{"changes":"summarize the implementation","evidence":[{"kind":"red","command":"go test ./...","exit_code":1,"artifact_path":"artifacts/red.txt"},{"kind":"green","command":"go test ./...","exit_code":0,"artifact_path":"artifacts/green.txt"}],"evidence_policy":{"Exempt":false,"Reason":""}}
+{"changes":"summarize the implementation","evidence":[{"kind":"red","command":"go test ./...","exit_code":1,"started_at":"2024-01-01T00:00:00Z","finished_at":"2024-01-01T00:00:05Z","artifact_path":"artifacts/red.txt"},{"kind":"green","command":"go test ./...","exit_code":0,"started_at":"2024-01-01T00:10:00Z","finished_at":"2024-01-01T00:10:05Z","artifact_path":"artifacts/green.txt"}],"evidence_policy":{"Exempt":false,"Reason":""}}
 
 Implementation context:
 ` + string(contextJSON)
