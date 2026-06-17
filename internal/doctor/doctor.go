@@ -237,19 +237,13 @@ func checkAutoMerge(ctx context.Context, system System, autoMerge bool, reposito
 	if !autoMerge || repository.GitHub == "" {
 		return
 	}
-	output, err := system.Output(ctx, "gh", "repo", "view", repository.GitHub, "--json", "autoMergeAllowed")
+	output, err := system.Output(ctx, "gh", "api", "repos/"+repository.GitHub, "--jq", ".allow_auto_merge")
 	if err != nil {
 		addWarn("Repository "+repository.Name+" auto-merge", err, "")
 		return
 	}
-	var info struct {
-		AutoMergeAllowed bool `json:"autoMergeAllowed"`
-	}
-	if err := json.Unmarshal([]byte(output), &info); err != nil {
-		addWarn("Repository "+repository.Name+" auto-merge", fmt.Errorf("read auto-merge setting: %w", err), "")
-		return
-	}
-	if !info.AutoMergeAllowed {
+	allowed := strings.TrimSpace(output) == "true"
+	if !allowed {
 		addWarn("Repository "+repository.Name+" auto-merge", errors.New("repository does not allow auto-merge; approved Change Sets will await manual merge"), "")
 		return
 	}

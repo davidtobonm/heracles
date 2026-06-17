@@ -168,3 +168,66 @@ func TestDetectVerificationUnrecognizedStack(t *testing.T) {
 		t.Errorf("DetectVerification() commands = %v, want nil", commands)
 	}
 }
+
+func TestDetectStack(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		file  string
+		stack string
+	}{
+		{name: "flutter", file: "pubspec.yaml", stack: "Dart/Flutter"},
+		{name: "go", file: "go.mod", stack: "Go"},
+		{name: "node", file: "package.json", stack: "Node.js"},
+		{name: "python pyproject", file: "pyproject.toml", stack: "Python"},
+		{name: "python requirements", file: "requirements.txt", stack: "Python"},
+		{name: "rust", file: "Cargo.toml", stack: "Rust"},
+		{name: "maven", file: "pom.xml", stack: "Java (Maven)"},
+		{name: "gradle", file: "build.gradle", stack: "Java/Kotlin (Gradle)"},
+		{name: "ruby", file: "Gemfile", stack: "Ruby"},
+		{name: "php", file: "composer.json", stack: "PHP"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeFile(t, dir, testCase.file, "")
+			if got := setup.DetectStack(dir); got != testCase.stack {
+				t.Errorf("DetectStack() = %q, want %q", got, testCase.stack)
+			}
+		})
+	}
+}
+
+func TestDetectStackUnrecognized(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeFile(t, dir, "README.md", "# Widget\n")
+
+	if got := setup.DetectStack(dir); got != "" {
+		t.Errorf("DetectStack() = %q, want empty for unrecognized stack", got)
+	}
+}
+
+func TestRepositoryHasFilesIgnoresVersionControlAndHeraclesDirectories(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, ".heracles"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.heracles) error = %v", err)
+	}
+
+	if setup.RepositoryHasFiles(dir) {
+		t.Error("RepositoryHasFiles() = true, want false for a repository with only .git/.heracles")
+	}
+
+	writeFile(t, dir, "main.go", "package main\n")
+	if !setup.RepositoryHasFiles(dir) {
+		t.Error("RepositoryHasFiles() = false, want true once a real file exists")
+	}
+}

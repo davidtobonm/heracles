@@ -335,7 +335,7 @@ func TestCheckWarnsWhenAutoMergeNotAllowedWithoutBlocking(t *testing.T) {
 	loaded.Config.Delivery.AutoMerge = true
 	system := &fakeSystem{outputs: map[string]string{
 		"gh label list --repo acme/backlog --json name --limit 100": allLabelsJSON(t),
-		"gh repo view acme/app --json autoMergeAllowed":             `{"autoMergeAllowed":false}`,
+		"gh api repos/acme/app --jq .allow_auto_merge":              "false",
 		"gh api repos/acme/app/actions/workflows --jq .total_count": "1",
 	}}
 
@@ -346,6 +346,27 @@ func TestCheckWarnsWhenAutoMergeNotAllowedWithoutBlocking(t *testing.T) {
 	}
 	if !strings.Contains(report.String(), "[warn] Repository app auto-merge") {
 		t.Errorf("report = %q, want auto-merge warning", report.String())
+	}
+}
+
+func TestCheckPassesWhenAutoMergeAllowed(t *testing.T) {
+	t.Parallel()
+
+	loaded := baseLoadedConfig(t.TempDir())
+	loaded.Config.Delivery.AutoMerge = true
+	system := &fakeSystem{outputs: map[string]string{
+		"gh label list --repo acme/backlog --json name --limit 100": allLabelsJSON(t),
+		"gh api repos/acme/app --jq .allow_auto_merge":              "true",
+		"gh api repos/acme/app/actions/workflows --jq .total_count": "1",
+	}}
+
+	report := doctor.Check(context.Background(), loaded, agent.DefaultRegistry(), system)
+
+	if !report.OK {
+		t.Fatalf("Check() report is not OK, want auto-merge allowed to pass:\n%s", report.String())
+	}
+	if !strings.Contains(report.String(), "[ok] Repository app auto-merge") {
+		t.Errorf("report = %q, want auto-merge ok diagnostic", report.String())
 	}
 }
 
