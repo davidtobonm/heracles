@@ -339,6 +339,10 @@ func Body(proposal Proposal, parentPRDURL, revision string, dependencyURLs map[s
 
 %s
 
+## TDD Exemption
+
+%s
+
 ## Target Repositories
 
 %s
@@ -358,7 +362,8 @@ func Body(proposal Proposal, parentPRDURL, revision string, dependencyURLs map[s
 <!-- heracles:issue-id=%s -->
 <!-- heracles:prd-revision=%s -->
 `, proposal.Type, numbers(proposal.UserStories), proposal.WhatToBuild, bullets(proposal.AcceptanceCriteria),
-		bullets(proposal.TargetRepositories), bullets(proposal.ConflictKeys), bullets(blockedBy), parentPRDURL, proposal.ID, revision)
+		tddExemption(proposal.TDDExemptionReason), bullets(proposal.TargetRepositories), bullets(proposal.ConflictKeys),
+		bullets(blockedBy), parentPRDURL, proposal.ID, revision)
 }
 
 // SemanticID returns the Issue Author-assigned semantic ID embedded in an
@@ -427,4 +432,14 @@ func bullets(values []string) string {
 		lines[index] = "- " + value
 	}
 	return strings.Join(lines, "\n")
+}
+
+// tddExemption renders the Issue Author's stated rationale for exempting a
+// proposal from Red and Green Evidence, or an explicit non-exemption notice
+// when reason is empty, per skills/to-issues-for-heracles/SKILL.md.
+func tddExemption(reason string) string {
+	if reason == "" {
+		return "Not exempt; Red and Green Evidence required."
+	}
+	return reason
 }
